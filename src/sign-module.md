@@ -164,5 +164,6 @@
 ## 参考内容
 
 - 签到页面路径：`/kf_growup.php`
-- 签到链接模式：`kf_growup.php?ok=...&safeid=...&color=...`
+- 签到动作链接：`kf_growup.php?ok=1&safeid=...`（预计，待未签到状态验证）
+- ID 颜色设置链接（**非签到**，需排除）：`kf_growup.php?ok=2&safeid=...&color=N`
 - 已签到判定文本：`今天的每日奖励已经领过了，请明天继续。` 等
