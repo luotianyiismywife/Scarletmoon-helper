@@ -1,0 +1,32 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^Get-CimInstance Win32_Process -Filter \"Name='firefox\\.exe'\" \\| Where-Object \\{ \\$_\\.ExecutablePath -like '\\*Nightly\\*' \\} \\| Select-Object -First 1 -ExpandProperty CommandLine$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^\\$profile = \"\\$env:APPDATA\\\\Mozilla\\\\Firefox\\\\Profiles\\\\30hfbhjk\\.default-nightly\"; Write-Output \"--- browser-extension-data ---\"; if \\(Test-Path \"\\$profile\\\\browser-extension-data\"\\) \\{ Get-ChildItem \"\\$profile\\\\browser-extension-data\" \\} else \\{ Write-Output \"不存在\" \\}; Write-Output \"--- storage ---\"; if \\(Test-Path \"\\$profile\\\\storage\"\\) \\{ Get-ChildItem \"\\$profile\\\\storage\" \\} else \\{ Write-Output \"不存在\" \\}; Write-Output \"--- extensions 目录 ---\"; Get-ChildItem \"\\$profile\\\\extensions\" -ErrorAction SilentlyContinue \\| Select-Object Name$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^\\$prefs = \"\\$env:APPDATA\\\\Mozilla\\\\Firefox\\\\Profiles\\\\30hfbhjk\\.default-nightly\\\\prefs\\.js\"; Get-Content \\$prefs \\| Select-String -Pattern \"extensions\\.enabledScopes\\|extensions\\.autoDisableScopes\\|xpinstall\\|remote\\.prefs\\|marionette\\|automation\\|extensions\\.installDistroAddons\\|disableDeveloperTools\" \\| ForEach-Object \\{ \\$_\\.Line\\.Trim\\(\\) \\}$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^Move-Item \"C:\\\\Users\\\\HJM\\\\Documents\\\\Scarletmoon-helper\\\\true\" \"C:\\\\Users\\\\HJM\\\\Documents\\\\Scarletmoon-helper\\\\install-page-screenshot\\.png\" -Force; Get-Item \"C:\\\\Users\\\\HJM\\\\Documents\\\\Scarletmoon-helper\\\\install-page-screenshot\\.png\" \\| Select-Object Name, Length$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^\\$profile = \"\\$env:APPDATA\\\\Mozilla\\\\Firefox\\\\Profiles\\\\30hfbhjk\\.default-nightly\"; Write-Output \"--- browser-extension-data ---\"; if \\(Test-Path \"\\$profile\\\\browser-extension-data\"\\) \\{ Get-ChildItem \"\\$profile\\\\browser-extension-data\" -Recurse -Depth 2 \\| Select-Object FullName \\} else \\{ Write-Output \"不存在\" \\}; Write-Output \"--- storage 目录 ---\"; Get-ChildItem \"\\$profile\\\\storage\\\\permanent\" -Directory -ErrorAction SilentlyContinue \\| ForEach-Object \\{ \\$_\\.Name \\}$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^\\$profile = \"\\$env:APPDATA\\\\Mozilla\\\\Firefox\\\\Profiles\\\\30hfbhjk\\.default-nightly\"; Get-ChildItem \"\\$profile\\\\storage\\\\permanent\",\"\\$profile\\\\storage\\\\default\" -Directory -ErrorAction SilentlyContinue \\| ForEach-Object \\{ \\$_\\.Name \\} \\| Sort-Object -Unique; Write-Host \"---temporary---\"; Get-ChildItem \"\\$profile\\\\storage\\\\temporary\" -Directory -ErrorAction SilentlyContinue \\| ForEach-Object \\{ \\$_\\.Name \\} \\| Sort-Object -Unique$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^\\$profile = \"\\$env:APPDATA\\\\Mozilla\\\\Firefox\\\\Profiles\\\\30hfbhjk\\.default-nightly\"; Get-ChildItem \"\\$profile\\\\storage\\\\permanent\" -Directory -ErrorAction SilentlyContinue \\| Where-Object \\{ \\$_\\.Name -like \"moz-extension\\*\" \\} \\| ForEach-Object \\{ Write-Output \"=== \\$\\(\\$_\\.Name\\) ===\"; Get-ChildItem \\$_\\.FullName -Recurse -Depth 2 -ErrorAction SilentlyContinue \\| Select-Object -First 8 -ExpandProperty FullName \\}$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
