@@ -1,13 +1,13 @@
-# Scarletmoon 主脚本说明（main.js）
+# Scarletmoon 主脚本说明（src/main.js）
 
-本文件描述入口脚本 `main.js` 的设计：模块加载机制、构建流程、执行流程与菜单命令。
+本文件描述入口脚本 `src/main.js` 的设计：模块加载机制、构建流程、执行流程与菜单命令。
 
 ## 脚本目标
 
-`main.js` 是油猴脚本入口，负责：
+`src/main.js` 是油猴脚本入口，负责：
 
 - 在绯月论坛任意页面加载时启动
-- 加载签到模块（`sign-module.js`）
+- 加载签到模块（`src/sign-module.js`）
 - 注册 Tampermonkey 菜单命令
 - 自动触发每日签到
 
@@ -38,7 +38,7 @@
 
 开发时主脚本未内联模块，会尝试：
 
-1. 通过 `@resource` 引入 `sign-module.js`（需 HTTP 托管，Firefox 禁止 `file://`）
+1. 通过 `@resource` 引入 `src/sign-module.js`（需 HTTP 托管，Firefox 禁止 `file://`）
 2. `GM_getResourceText('sign_module')` 获取源码
 3. 创建 `Blob` 生成临时 `blob:` URL
 4. `await import(blobUrl)` 动态加载 ES 模块
@@ -47,7 +47,7 @@
 
 ## 构建流程
 
-修改 `sign-module.js` 后，运行：
+修改 `src/sign-module.js` 后，运行：
 
 ```bash
 node build.js
@@ -57,9 +57,9 @@ node build.js
 
 构建步骤（见 `build.js`）：
 
-1. 读取 `sign-module.js` 模块源码
+1. 读取 `src/sign-module.js` 模块源码
 2. 去掉 `export` 关键字，转为普通脚本
-3. 替换 `main.js` 中的 `// @@INLINE_MODULE@@` 标记
+3. 替换 `src/main.js` 中的 `// @@INLINE_MODULE@@` 标记
 4. 输出 `dist/allinone.user.js`
 
 ## 执行流程

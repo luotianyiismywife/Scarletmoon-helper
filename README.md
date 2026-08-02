@@ -6,7 +6,7 @@
 
 - 提供绯月论坛每日签到辅助功能
 - 自动查找签到入口并执行签到
-- 提供手动签到命令和自动签到开关
+- 提供手动签到菜单命令（打开签到页 / 立即签到）
 
 ## 安装
 
@@ -23,13 +23,13 @@
 1. 将 `src/main.js` 的内容复制进 Tampermonkey 新建脚本
 2. 在 `@resource` 中取消注释并填写模块托管地址（Firefox 禁止 `file://`，需 HTTP 服务）：
    ```
-   // @resource     sign_module http://localhost:8899/sign-module.js?v=2
+   // @resource     sign_module http://localhost:8899/src/sign-module.js?v=2
    ```
-3. 在仓库目录运行本地服务器：
+3. 在仓库根目录运行本地服务器：
    ```
    python -m http.server 8899
    ```
-   （需将模块托管为仓库根路径：如 `src/sign-module.js` 映射到 `/sign-module.js`）
+   （模块位于 `src/`，访问路径对应 `/src/sign-module.js`）
 4. 修改模块后，若未生效，给资源 URL 加版本参数（如 `?v=2`）强制刷新缓存
 
 > 注：安装/更新确认页需在 Tampermonkey 界面手动点击确认。
@@ -54,9 +54,9 @@ node build.js
 ## 脚本说明
 
 - `src/main.js`：主脚本文件（入口）
-- 通过菜单命令执行签到
-- 可切换自动签到模式
-- 自动识别按钮/链接文本中包含“签到”“每日签到”等关键字的元素
+- 页面加载时自动触发签到
+- 通过 Tampermonkey 菜单命令手动签到（打开签到页面 / 执行签到）
+- 自动解析签到动作链接（`ok=1` 或含“领取”等文本），不会误触颜色设置链接
 
 ## 文档索引
 

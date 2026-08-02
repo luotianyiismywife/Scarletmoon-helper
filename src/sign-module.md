@@ -1,10 +1,10 @@
 # Scarletmoon 签到模块说明
 
-本文件描述 `sign-module.js` 在绯月论坛签到功能中的设计、执行流程、API 以及扩展方式。
+本文件描述 `src/sign-module.js` 在绯月论坛签到功能中的设计、执行流程、API 以及扩展方式。
 
 ## 模块目标
 
-`sign-module.js` 的目标是提供一个独立可复用的签到功能模块，支持：
+`src/sign-module.js` 的目标是提供一个独立可复用的签到功能模块，支持：
 
 - 在任意论坛页面执行签到逻辑
 - 自动读取签到页面内容
@@ -31,8 +31,9 @@
 
 - `FORUM_HOST`：`bbs.kfpromax.com`
 - `SIGN_PAGE`：`/kf_growup.php`
-- `DENY_TEXT`：用于识别“已签到”或“无需再次签到”的提示文本
-- `TARGET_TEXT`：用于识别签到按钮或签到链接上的关键字
+- `DENY_TEXT`：链接文本黑名单，含这些词的链接不视为签到入口
+- `TARGET_TEXT`：链接文本白名单，含这些词的链接优先视为签到入口
+- `SIGN_STATUS_REGEX`：已签到状态正则（匹配“已经领过了/请明天继续/已领过”等）
 
 ## 功能说明
 
@@ -45,6 +46,18 @@
 - 未知编码时依次回退：`gbk` → `utf-8`
 
 用途：解决 GBK 页面中文乱码导致的所有判定/解析失效问题。
+
+### 2. parseSignStatus
+
+`parseSignStatus(htmlText)`
+
+- 返回状态对象：
+  - `alreadySigned`：是否已签到（同 `isAlreadySigned`）
+  - `hasTryAgainText`：是否包含“请明天继续”提示
+
+用途：结构化读取签到状态，便于后续扩展状态展示。
+
+> 注：该 API 已导出，但**未包含**在 `getDefaultSignModule()` 返回对象中。
 
 ### 3. fetchSignPage
 
@@ -61,7 +74,7 @@
 
 `isAlreadySigned(htmlText)`
 
-- 对签到页面 HTML 或签到结果 HTML 执行正则匹配
+- 对签到页面 HTML 或签到结果 HTML 执行正则匹配（`SIGN_STATUS_REGEX`）
 - 检测文本：
   - `今天的每日奖励已经领过了，请明天继续。`
   - `今日奖励已领取`
@@ -93,12 +106,13 @@
 
 `sendSignRequest(actionUrl)`
 
-- 将相对路径或绝对路径标准化为完整 URL
+- 通过 `normalizeActionUrl` 将相对路径或绝对路径标准化为完整 URL
 - 发起 `fetch` GET 请求，带 `credentials: 'include'`
-- 读取返回 HTML 文本
+- 通过 `decodeResponse` 读取返回 HTML 文本
 - 返回对象：
   - `ok`：HTTP 响应是否成功
   - `status`：HTTP 状态码
+  - `actionUrl`：实际请求的完整 URL
   - `alreadySigned`：是否已签到
   - `text`：完整响应 HTML
 
@@ -117,6 +131,16 @@
 5. 若未找到链接，则终止并记录失败信息
 6. 调用 `sendSignRequest(actionUrl)` 发起签到请求
 7. 根据返回结果判断签到是否成功或是否已签到
+
+返回对象：
+
+- `success`：流程是否成功完成
+- `message`：状态说明文本
+- `alreadySigned`：是否已签到
+- `actionUrl`：实际发送的签到 URL（未发送时为 `null`）
+- `responseText`：签到响应 HTML（请求发送后才有）
+
+同时向控制台输出 `[绯月签到助手]` 前缀的状态日志。
 
 用途：主脚本调用此方法即可在任意论坛页面尝试自动签到。
 
@@ -140,10 +164,23 @@
 
 `getDefaultSignModule()`
 
-- 返回包含模块所有方法与常量的对象
-- 便于在不支持模块默认导出的环境中统一调用
+- 返回包含模块所有方法与常量的对象：
+  - `FORUM_HOST`、`SIGN_PAGE`
+  - `fetchSignPage`、`isAlreadySigned`、`findSignActionUrl`、`sendSignRequest`
+  - `autoSignInOnAnyPage`、`goToSignPage`、`executeSignIn`
+- 构建产物（`dist/allinone.user.js`）通过它挂载 `window.ScarletmoonSignModule`
 
-用途：如果需要将模块作为普通对象加载，这个方法可以快速获取完整 API 集合。
+用途：将模块作为普通对象暴露给非 ES 模块环境统一调用。
+
+> 注：`parseSignStatus` 不在返回对象中。
+
+## 内部辅助函数
+
+以下函数为模块内部使用，未导出：
+
+- `normalizeActionUrl(actionUrl)`：将相对/绝对 URL 标准化为完整 URL，无效时返回 `null`
+- `extractActionUrlFromOnclick(htmlText)`：从 `onclick="location.href='...'"` 中提取 URL
+- `isColorSettingLink(href)`：判断是否为 `ok=2&color=N` 的 ID 颜色设置链接
 
 ## 兼容性与注意事项
 
