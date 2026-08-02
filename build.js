@@ -1,10 +1,10 @@
 /**
  * Scarletmoon Helper 构建脚本
- * 将 sign-module.js 合并进 scarletmoon-helper.user.js，
+ * 将 src/sign-module.js 合并进 src/main.js（入口），
  * 生成自包含的单文件版本（无需本地服务器 / @resource）。
  *
  * 用法：node build.js
- * 输出：dist/scarletmoon-helper.user.js
+ * 输出：dist/allinone.user.js（.user.js 后缀可触发油猴安装/更新）
  */
 'use strict';
 
@@ -12,10 +12,10 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = __dirname;
-const MODULE_FILE = path.join(ROOT, 'sign-module.js');
-const MAIN_FILE = path.join(ROOT, 'scarletmoon-helper.user.js');
+const MODULE_FILE = path.join(ROOT, 'src', 'sign-module.js');
+const MAIN_FILE = path.join(ROOT, 'src', 'main.js');
 const OUT_DIR = path.join(ROOT, 'dist');
-const OUT_FILE = path.join(OUT_DIR, 'scarletmoon-helper.user.allinone.js');
+const OUT_FILE = path.join(OUT_DIR, 'allinone.user.js');
 const INLINE_MARKER = '// @@INLINE_MODULE@@';
 
 /** 把 ES 模块源码转换为普通脚本源码（去掉 export，挂到 window） */

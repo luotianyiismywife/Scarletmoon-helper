@@ -20,9 +20,6 @@
 - **论坛页面是 GBK 编码**（`charset=gbk`），直接 `response.text()` 会按 UTF-8 解码导致中文乱码，所有中文正则匹配失效。必须用 `TextDecoder('gbk')` 或按响应头 charset 解码。
 - **`ok=2&color=N` 链接是“选择该颜色”（ID 颜色设置），不是签到**，必须排除。误发送会修改用户的 ID 颜色。
 - 真实的每日奖励签到动作预计为 `kf_growup.php?ok=1&safeid=...`（待未签到状态时验证）。
-- Tampermonkey 会缓存 `@resource` 资源，修改模块后需给资源 URL 加版本参数（如 `?v=2`）才会重新下载。
-- Tampermonkey 安装/更新确认页面（`moz-extension://`）是浏览器特权页面，WebDriver 无法自动化点击，需用户手动确认。
-- Firefox 禁止从 `file://` 加载 `@resource`，本地调试需用 `http://localhost:端口/` 托管模块。
 
 ## 适用场景
 
@@ -49,7 +46,7 @@
 
 用途：解决 GBK 页面中文乱码导致的所有判定/解析失效问题。
 
-### 2. fetchSignPage
+### 3. fetchSignPage
 
 `fetchSignPage()`
 
@@ -60,7 +57,7 @@
 
 用途：在当前页面中自动获取签到页面内容，而无需用户手动打开。
 
-### 2. isAlreadySigned
+### 4. isAlreadySigned
 
 `isAlreadySigned(htmlText)`
 
@@ -74,7 +71,7 @@
 
 用途：避免重复请求，减少无效签到。
 
-### 4. findSignActionUrl
+### 5. findSignActionUrl
 
 `findSignActionUrl(htmlText)`
 
@@ -92,7 +89,7 @@
 
 用途：从签到页面中提取真正的签到请求 URL，避免误发颜色设置请求。
 
-### 4. sendSignRequest
+### 6. sendSignRequest
 
 `sendSignRequest(actionUrl)`
 
@@ -107,7 +104,7 @@
 
 用途：执行签到动作并获取结果。
 
-### 5. autoSignInOnAnyPage
+### 7. autoSignInOnAnyPage
 
 `autoSignInOnAnyPage()`
 
@@ -123,7 +120,7 @@
 
 用途：主脚本调用此方法即可在任意论坛页面尝试自动签到。
 
-### 6. goToSignPage
+### 8. goToSignPage
 
 `goToSignPage()`
 
@@ -131,7 +128,7 @@
 
 用途：作为菜单命令或手动入口，让用户直接打开签到页面查看结果。
 
-### 7. executeSignIn
+### 9. executeSignIn
 
 `executeSignIn()`
 
@@ -139,7 +136,7 @@
 
 用途：提供一个更语义化的外部 API，便于主脚本或其它模块调用。
 
-### 8. getDefaultSignModule
+### 10. getDefaultSignModule
 
 `getDefaultSignModule()`
 
@@ -148,43 +145,10 @@
 
 用途：如果需要将模块作为普通对象加载，这个方法可以快速获取完整 API 集合。
 
-## 模块加载方式
-
-### 发布版（自包含单文件）
-
-`node build.js` 将 `sign-module.js` 转换为普通脚本并内联进主脚本：
-
-- 去掉 `export` 关键字
-- 末尾追加 `window.ScarletmoonSignModule = getDefaultSignModule();`
-- 输出 `dist/scarletmoon-helper.user.js`（无需服务器、无需 `@resource`）
-
-主脚本优先使用 `window.ScarletmoonSignModule`。
-
-### 开发版（ES 模块动态加载）
-
-主脚本在全局模块不存在时，会尝试：
-
-- 通过 `@resource` 将 `sign-module.js` 引入为资源（需 HTTP 托管，Firefox 禁止 `file://`）
-- 使用 `GM_getResourceText('sign_module')` 获取脚本源码
-- 创建 `Blob` 并生成临时 `blob:` URL
-- `await import(blobUrl)` 动态加载 ES 模块
-
-这种加载方式可以让主脚本保持轻量，并保持模块化结构，适合开发调试。
-
-## 执行流程总结
-
-1. 在任意 `bbs.kfpromax.com` 页面加载时，主脚本调用 `autoSignInOnAnyPage()`。
-2. 模块自动请求签到页面 `/kf_growup.php`。
-3. 模块检测是否已签到。若已签到则结束。
-4. 模块解析签到页面中的动作链接。
-5. 模块直接发送签到请求。
-6. 模块返回签到结果，并在控制台打印状态。
-
 ## 兼容性与注意事项
 
-- 依赖浏览器环境支持 `fetch`、`DOMParser`、`URL.createObjectURL`、`import()`
+- 依赖浏览器环境支持 `fetch`、`DOMParser`、`TextDecoder`
 - 依赖 `credentials: 'include'` 以使用当前论坛登录会话
-- 需要 Tampermonkey/Violentmonkey 允许本地 `file://` 资源读取
 - 若论坛签到页面结构变化，`findSignActionUrl` 可能需要更新解析规则
 
 ## 扩展建议
