@@ -8,13 +8,13 @@
 
 ## 文件对应关系
 
-| JS 文件 | 对应文档 | 同步内容 |
-|---------|---------|---------|
-| `src/main.js` | `src/main.md` | 元数据、模块加载机制、菜单命令、执行流程 |
-| `src/sign-module.js` | `src/sign-module.md` | API 列表、参数/返回值、常量、内部辅助函数、解析规则 |
-| `build.js` | `build.md` | 构建步骤、内联标记约定、产物说明 |
-| 任一变更 | `README.md` | 安装方式、签到说明、脚本说明、文档索引 |
-| 规则本身 | `.copilot/instructions.md` | 涉及文件对应关系、检查清单、业务约定的变更需同步本文件 |
+| JS 文件              | 对应文档                   | 同步内容                                               |
+| -------------------- | -------------------------- | ------------------------------------------------------ |
+| `src/main.js`        | `src/main.md`              | 元数据、模块加载机制、菜单命令、执行流程               |
+| `src/sign-module.js` | `src/sign-module.md`       | API 列表、参数/返回值、常量、内部辅助函数、解析规则    |
+| `build.js`           | `build.md`                 | 构建步骤、内联标记约定、产物说明                       |
+| 任一变更             | `README.md`                | 安装方式、签到说明、脚本说明、文档索引                 |
+| 规则本身             | `.copilot/instructions.md` | 涉及文件对应关系、检查清单、业务约定的变更需同步本文件 |
 
 ## 修改 JS 后的必查清单
 
@@ -50,12 +50,13 @@
 
 - 论坛页面为 **GBK 编码**，必须经 `decodeResponse` 解码，文档中不得描述"直接 `response.text()`"
 - `kf_growup.php?ok=2&safeid=...&color=N` 是 **ID 颜色设置链接，不是签到**，文档中必须注明"需排除"
-- 签到动作为 `kf_growup.php?ok=3&safeid=...`（2026-08-03 未签到态实测验证，注意页面无 ok=1 链接，旧脚本靠正则兜底命中 ok=3），`ok=1` 为兼容后备，`ok=2&color=N` 为颜色设置需排除
+- 签到动作为 `kf_growup.php?ok=3&safeid=...`（2026-08-03 未签到态实测验证），**`ok=1` 从未在实际页面/请求中出现过**，仅防御性兼容保留，`ok=2&color=N` 为颜色设置需排除
 - `getDefaultSignModule()` 返回对象不包含 `parseSignStatus`，文档需保持一致
 
 ## 构建后检查
 
 运行 `node build.js` 后，确认：
+
 - 产物路径为 `dist/allinone.user.js`
 - 若构建脚本行为变化，`build.md` 需同步
 
