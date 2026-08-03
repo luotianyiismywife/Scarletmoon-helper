@@ -6,7 +6,3 @@ node_modules/
 
 # VS Code 本地配置（MCP、设置等，不同步仓库）
 .vscode/
-
-# ������ʱ�ļ�
-sign-response.txt
-tmp-*.js
