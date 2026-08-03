@@ -50,7 +50,7 @@
 
 - 论坛页面为 **GBK 编码**，必须经 `decodeResponse` 解码，文档中不得描述"直接 `response.text()`"
 - `kf_growup.php?ok=2&safeid=...&color=N` 是 **ID 颜色设置链接，不是签到**，文档中必须注明"需排除"
-- 签到动作预计为 `kf_growup.php?ok=1&safeid=...`（未验证前文档需保留"待验证"标注）
+- 签到动作为 `kf_growup.php?ok=3&safeid=...`（2026-08-03 未签到态实测验证，注意页面无 ok=1 链接，旧脚本靠正则兜底命中 ok=3），`ok=1` 为兼容后备，`ok=2&color=N` 为颜色设置需排除
 - `getDefaultSignModule()` 返回对象不包含 `parseSignStatus`，文档需保持一致
 
 ## 构建后检查

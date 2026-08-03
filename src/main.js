@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         绯月论坛签到助手
 // @namespace    https://github.com/luotianyiismywife/Scarletmoon-helper
-// @version      0.5.0
+// @version      0.6.0
 // @description  绯月论坛每日签到辅助，自动触发签到；支持自包含单文件版与 ES 模块开发版
 // @author       luotianyiismywife
 // @match        https://bbs.kfpromax.com/*
@@ -39,7 +39,9 @@
     };
 
     const init = async () => {
+        console.log(`[绯月签到助手] 脚本启动 v0.6.0 @ ${location.href}`);
         if (location.host !== FORUM_HOST) {
+            console.log(`[绯月签到助手] 非目标域名 ${location.host}，跳过。`);
             return;
         }
 
@@ -48,6 +50,7 @@
             console.error('[绯月签到助手] 无法加载签到模块。');
             return;
         }
+        console.log(`[绯月签到助手] 模块加载成功，来源: ${window.ScarletmoonSignModule ? '内联构建版' : 'ES 模块动态加载'}`);
 
         registerMenu(signModule);
         await signModule.autoSignInOnAnyPage();

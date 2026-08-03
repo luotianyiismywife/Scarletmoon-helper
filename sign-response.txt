@@ -1,0 +1,43 @@
+{
+  "id": "43-f3dd9820-be27-47c3-9abc-736bd62a65d5",
+  "url": "https://bbs.kfpromax.com/kf_growup.php?ok=3&safeid=582603c",
+  "method": "GET",
+  "status": 200,
+  "statusText": "",
+  "resourceType": "document",
+  "isXHR": false,
+  "timestamp": 1785721878952,
+  "timings": {
+    "requestTime": 1785721878952,
+    "responseTime": 1785721879662,
+    "duration": 710
+  },
+  "requestHeaders": {
+    "host": "bbs.kfpromax.com",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0",
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5",
+    "accept-encoding": "gzip, deflate, br, zstd",
+    "referer": "https://bbs.kfpromax.com/kf_growup.php",
+    "dnt": "1",
+    "sec-gpc": "1",
+    "connection": "keep-alive",
+    "cookie": "2ed4e_skinco=default; 2ed4e_lastpos=other; 2ed4e_ol_offset=7178; 2ed4e_ipstate=1785721879; 2ed4e_ck_info=%2F%09; 2ed4e_winduser=BAVcD1cLPVZQU1NRDFNeBANVAQZSVAdXDAQHAAUHVgBeVlZRUQMHPg%3D%3D; 2ed4e_lastvisit=923%091785721881%09%2Fkf_growup.php%3F; 2ed4e_threadlog=%2C5%2C; PHPSESSID=qa333m9i8pbddcjs9pvscgddv1",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin"
+  },
+  "responseHeaders": {
+    "server": "nginx",
+    "date": "Mon, 03 Aug 2026 01:51:22 GMT",
+    "content-type": "text/html; charset=gbk",
+    "vary": "Accept-Encoding",
+    "x-powered-by": "PHP/5.4.45",
+    "expires": "Thu, 19 Nov 1981 08:52:00 GMT",
+    "cache-control": "no-store, no-cache, must-revalidate, post-check=0, pre-check=0",
+    "pragma": "no-cache",
+    "set-cookie": "2ed4e_skinco=default; expires=Tue, 03-Aug-2027 01:51:22 GMT; path=/; secure; httponly\n2ed4e_lastvisit=924%091785721882%09%2Fkf_growup.php%3Fok%3D3%26safeid%3D582603c; expires=Tue, 03-Aug-2027 01:51:22 GMT; path=/; secure; httponly",
+    "content-encoding": "gzip",
+    "x-firefox-spdy": "h2"
+  }
+}
