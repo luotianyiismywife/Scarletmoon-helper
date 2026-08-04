@@ -97,7 +97,7 @@ export const findSignActionUrl = (htmlText) => {
 
     // 打印所有含 kf_growup 的候选链接，便于调试
     const growupLinks = allCandidates.filter((c) => /kf_growup/i.test(c.href + c.onclick));
-    log(`[步骤3] 含 kf_growup 的候选:`, growupLinks.map((c) => `${c.href || c.onclick.slice(0, 40)} | 文本=${c.text.slice(0, 20)}`));
+    log(`[步骤3] 含 kf_growup 的候选:`, growupLinks.map((c) => `${c.href || c.onclick.slice(0, 40)} | 文本=${c.text.slice(0, 20)}`).join('\n'));
 
     const signLinks = allCandidates
         .filter(({ href, onclick, text }) => {
@@ -120,9 +120,9 @@ export const findSignActionUrl = (htmlText) => {
                 log(`[步骤3] 命中文本关键字: ${candidate} (文本含「${text.slice(0, 20)}」)`);
                 return true;
             }
-            // 其次：kf_growup.php?ok=3（实测每日奖励签到动作，2026-08-03 验证）；ok=1 保留兼容
-            if (/kf_growup\.php\?ok=[13](?:&|$)/i.test(candidate)) {
-                log(`[步骤3] 命中 ok=1/3 动作链接: ${candidate}`);
+            // 其次：kf_growup.php?ok=3（实测每日奖励签到动作，2026-08-03/08-04 验证）
+            if (/kf_growup\.php\?ok=3(?:&|$)/i.test(candidate)) {
+                log(`[步骤3] 命中 ok=3 动作链接: ${candidate}`);
                 return true;
             }
             return false;
