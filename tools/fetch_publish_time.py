@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""从 咕咕镇.md 表格提取所有 tid+URL, 逐个 GET 帖子页提取真实发表时间。
+"""从 咕咕镇论坛内帖子.md 表格提取所有 tid+URL, 逐个 GET 帖子页提取真实发表时间。
 
 用法:
     python tools/fetch_publish_time.py --limit 5   # 调试: 只处理前5篇
@@ -18,7 +18,7 @@ import time
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MD_PATH = os.path.join(ROOT, "咕咕镇资料", "咕咕镇.md")
+MD_PATH = os.path.join(ROOT, "咕咕镇资料", "咕咕镇论坛内帖子.md")
 OUT_PATH = os.path.join(ROOT, "咕咕镇资料", "publish_time.json")
 COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
 
