@@ -68,13 +68,36 @@ Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5
   - 日期：`YYYY-MM-DD HH:MM` 文本
   - 正文起点：`class="readcza">菜单</a>` 之后，结束于 `</table>`
 - 分页：`read.php?tid=XXX&sf=XXX&page=N`
+- **发表时间（真实发布日期）**：楼主信息区文本 `楼主 YYYY-MM-DD HH:MM`（实测 `2025-01-26 02:31`）；正文中形如 `发表时间：YYYY-MM-DD HH:MM`
+  - ⚠️ 注意：搜索结果的"发表"列显示的是**最后回复时间**，非发布日期！要真实发布日期必须进帖子页
 
-### 3.3 用户资料：`/profile.php`
+### 3.3 搜索接口：`/search.php`（实测 2026-08-05）
+**POST 全站搜索（表单提交）：**
+```
+POST https://bbs.kfpromax.com/search.php?
+Content-Type: application/x-www-form-urlencoded
+
+step=2&method=AND&sch_area=0&s_type=forum&f_fid=all&orderway=lastpost&asc=DESC&keyword=<GBK编码>&pwuser=&submit=全站搜索
+```
+- `keyword` 必须按 **GBK** URL 编码（如"咕咕镇"=`%B9%BE%B9%BE%D5%F2`）；用 UTF-8 会搜到乱码/无结果
+- `sch_area=0` 标题搜索；`s_type=forum` 版块范围
+- 需先 GET `/search.php` 建立会话（拿 PHPSESSID）再 POST
+- 响应为 HTML 结果表格：表头 `标题 | 版块 | 发表`，每行 = 标题链接(`read.php?tid=...&sf=...&keyword=...`) | 版块 | 作者+最后回复时间
+- 页脚：`共搜索到了 N 条信息 本日剩余搜索次数 M 次`（**每日搜索次数有限**，实测约 30 次/日）
+- 每页约 60 条，共 9 页
+
+**翻页（GET）：**
+```
+GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<搜索会话ID>&page=N
+```
+- `sid` = 搜索会话 ID，从第一次搜索结果页的分页链接里提取（随会话变化）
+
+### 3.4 用户资料：`/profile.php`
 - `profile.php?action=show&uid=XXX` 查看资料
 - `profile.php?action=modify` 修改资料
 - `profile.php?action=favor` 收藏夹
 
-### 3.4 其他常见接口
+### 3.5 其他常见接口
 | 路径 | 用途 |
 |------|------|
 | `login.php` | 登录（`login.php?action=quit&verify=XXX` 退出） |
@@ -132,10 +155,12 @@ Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5
 - 限速：默认 0.8s/篇，可 `--limit` / `--tid` / `--delay` 控制
 - 输出格式：`标题 / 日期 / URL / --- 楼层[pid] 作者 日期 --- 正文`
 
-### tools/analyze_posts.py / make_summary.py / mark_posts.py
-- `analyze_posts.py`：按关键词把 raw 帖子分类（攻略/机制/工具/水帖）→ `咕咕镇资料/analysis.txt`
-- `make_summary.py`：生成每帖摘要（标题+楼主150字）→ `咕咕镇资料/summary.txt`
-- `mark_posts.py`：根据分类把 `咕咕镇.md` 表格状态标为 ✅/⏭️
+### 已归档辅助脚本（已删除，产出物保留）
+- ~~`analyze_posts.py`~~：曾用于按关键词分类 raw 帖子 → 产出 `咕咕镇资料/analysis.txt`（已删除脚本，清单保留）
+- ~~`make_summary.py`~~：生成每帖摘要 → 产出 `咕咕镇资料/summary.txt`（已删除脚本，摘要保留）
+- ~~`mark_posts.py`~~：曾用于把表格状态标 ✅/⏭️（已删除，标记已写入文档）
+- **`fetch_publish_time.py`**（当前可用）：批量抓取每篇帖子的真实发表时间 → `咕咕镇资料/publish_time.json`
+- **`sort_posts.py`**（当前可用）：按发表时间倒序重排 `咕咕镇.md` 表格
 
 ---
 
