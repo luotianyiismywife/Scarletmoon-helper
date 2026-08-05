@@ -1,13 +1,5 @@
 # -*- coding: utf-8 -*-
-"""按真实发表时间重新排序 咕咕镇.md 已读帖子记录表。
-
-输入:
-    咕咕镇资料/publish_time.json  {tid: "YYYY-MM-DD HH:MM"}
-    咕咕镇资料/咕咕镇.md
-
-输出:
-    重写表格: 日期列改为真实发表时间(仅日期部分 YYYY-MM-DD), 按新日期倒序(由新到老)重排
-    无发表时间的帖子: 保留原日期 + 末尾标注
+"""按真实发表时间重新排序 咕咕镇论坛内帖子.md 已读帖子记录表。
 
 用法:
     python tools/sort_posts.py
@@ -17,7 +9,7 @@ import os
 import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MD_PATH = os.path.join(ROOT, "咕咕镇资料", "咕咕镇.md")
+MD_PATH = os.path.join(ROOT, "咕咕镇资料", "咕咕镇论坛内帖子.md")
 TIME_PATH = os.path.join(ROOT, "咕咕镇资料", "publish_time.json")
 
 ROW_RE = re.compile(
