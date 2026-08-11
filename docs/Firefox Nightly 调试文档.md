@@ -11,7 +11,7 @@
 |---|---|
 | 浏览器 | Firefox Nightly（`C:\Program Files\Firefox Nightly\firefox.exe`） |
 | 标准版 Firefox | `C:\Program Files\Mozilla Firefox\firefox.exe`（**勿误杀**） |
-| geckodriver | `%USERPROFILE%\AppData\Local\Programs\geckodriver\geckodriver.exe` |
+| geckodriver | `%LOCALAPPDATA%\Programs\geckodriver\geckodriver.exe` |
 | MCP 服务器 | `@mozilla/firefox-devtools-mcp@latest`（经 npx 运行） |
 | MCP 配置位置 | `.vscode/mcp.json`（工作区级） |
 | 调试端口 | **2828**（Marionette）+ **9222**（BiDi/remote-debugging） |
@@ -49,7 +49,7 @@
       ],
       "env": {
         "START_URL": "https://bbs.kfpromax.com/kf_growup.php",
-        "PATH": "%USERPROFILE%\\.local\\bin;...;%USERPROFILE%\\AppData\\Local\\Programs\\geckodriver;..."
+        "PATH": "%USERPROFILE%\.local\bin;...;%LOCALAPPDATA%\Programs\geckodriver;..."
       }
     }
   }
@@ -148,7 +148,7 @@ MCP 内置工具 `mcp__mozilla_fire_restart_firefox` 支持指定 profile：
 
 | 参数 | 说明 | 示例 |
 |---|---|---|
-| `profilePath` | 要使用的 profile 目录 | `%USERPROFILE%\AppData\Roaming\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly` |
+| `profilePath` | 要使用的 profile 目录 | `%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly` |
 | `firefoxPath` | 浏览器二进制路径 | `C:\Program Files\Firefox Nightly\firefox.exe` |
 | `startUrl` | 重启后打开的 URL | `https://www.momozhen.com/` |
 | `headless` | 无头模式 | `false` |
