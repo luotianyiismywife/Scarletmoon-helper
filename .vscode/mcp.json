@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "firefox-nightly": {
+      "type": "stdio",
+      "command": "npx.cmd",
+      "args": [
+        "-y",
+        "@mozilla/firefox-devtools-mcp@latest",
+        "--connect-existing",
+        "--marionette-port",
+        "2828",
+        "--tool-preset",
+        "developer"
+      ],
+      "env": {
+        "START_URL": "https://bbs.kfpromax.com/kf_growup.php",
+        "PATH": "${userHome}\\.local\\bin;${userHome}\\.cargo\\bin;${env:LOCALAPPDATA}\\Microsoft\\WindowsApps;${env:LOCALAPPDATA}\\Programs\\Microsoft VS Code\\bin;${env:APPDATA}\\npm;${env:LOCALAPPDATA}\\Programs\\geckodriver;C:\\Python314\\Scripts\\;C:\\Python314\\;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\nodejs\\;C:\\ProgramData\\chocolatey\\bin;C:\\Program Files\\Git\\cmd"
+      }
+    }
+  }
+}
