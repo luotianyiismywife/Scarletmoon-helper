@@ -6,6 +6,11 @@
     python tools/fetch_posts.py --limit 5  # 只抓前 5 篇（调试用）
     python tools/fetch_posts.py --tid 1052153   # 只抓指定 tid
 
+付费帖处理（2026-08-12）:
+    - 检测 "此帖售价 N KFB" 特征
+    - 售价 ≤10 KFB → 自动购买（job.php?action=buytopic）后重抓正文
+    - 售价 >10 KFB → 跳过并提示（SKIP-PAID）
+
 依赖:
     cookie.txt（由 tools/get_cookies.py 生成, 已 gitignore）
 """
@@ -64,6 +69,53 @@ def fetch_html(session, url):
     if "action=quit" not in r.text:
         raise RuntimeError("未登录 (无退出链接)")
     return r.text
+
+
+PAID_RE = re.compile(r"此帖售价 (\d+(?:\.\d+)?) KFB,已有 (\d+) 人购买")
+MAX_BUY_KFB = 10  # ≤10 KFB 的付费帖自动购买（用户规则 2026-08-12）
+
+
+def check_paid(html, tid):
+    """检测付费帖: 返回 (是否付费, 价格KFB, 购买URL或None)。
+    判定依据（2026-08-12 实测）:
+    - read.php 响应始终含 '此帖售价 N KFB' fieldset（无论是否已购买, 由 JS 控制显示）
+    - **未购买** → 楼主正文(pidtpc)被替换, 不含实质内容
+    - **已购买** → 楼主正文完整可见（正文里没有 fieldset 的替换, 纯文本存在）
+    - 关键: 用 'pidtpc' 楼主区块是否含实质文本判断是否已购买
+    返回: (是否付费, 价格, 需购买时的URL); 已购买或非付费 → buy_url=None
+    """
+    m = PAID_RE.search(html)
+    if not m:
+        return False, 0, None
+    price = float(m.group(1))
+
+    # 提取楼主正文区(pidtpc): 取 readtext 块内、菜单之后、table 之前
+    lm = re.search(r'<div class="readtext"[^>]*id="pidtpc"[^>]*>(.*?)(?=<div class="readtext"|$)', html, re.S)
+    tpc_text = ""
+    if lm:
+        seg = lm.group(1)
+        cm = re.search(r'class="readcza">菜单</a>\s*(.*?)(?=</table>)', seg, re.S)
+        tpc_text = strip_tags(cm.group(1)) if cm else ""
+    tpc_text = tpc_text.strip()
+
+    # 未购买: 楼主区无实质内容（只有购买提示/空）
+    if len(tpc_text) < 20:
+        btn = re.search(r"action=buytopic&tid=(\d+)&pid=(\w+)&verify=([0-9a-f]+)", html)
+        if btn:
+            buy_url = f"job.php?action=buytopic&tid={btn.group(1)}&pid={btn.group(2)}&verify={btn.group(3)}"
+            return True, price, buy_url
+        return True, price, None  # 无按钮(异常), 无法购买
+
+    # 已购买: 正文可见
+    return True, price, None
+
+
+def buy_paid(session, buy_url, tid):
+    """执行购买, 返回 (是否成功, 响应文本首段)。"""
+    url = "https://bbs.kfpromax.com/" + buy_url
+    r = session.get(url, timeout=25)
+    r.encoding = "gbk"
+    return r.status_code == 200, strip_tags(r.text)[:120]
 
 
 def parse_post(html):
@@ -133,6 +185,22 @@ def main():
             continue
         try:
             html = fetch_html(session, url)
+            # 付费帖检测 + 自动购买
+            is_paid, price, buy_url = check_paid(html, tid)
+            if is_paid and buy_url:
+                if price <= MAX_BUY_KFB:
+                    ok_buy, resp = buy_paid(session, buy_url, tid)
+                    if ok_buy:
+                        print(f"  [BUY] {tid} 付费 {price} KFB 已购买, 重抓正文")
+                        html = fetch_html(session, url)
+                    else:
+                        print(f"  [BUY-FAIL] {tid} 购买失败: {resp}")
+                else:
+                    print(f"  [SKIP-PAID] {tid} 售价 {price} KFB > {MAX_BUY_KFB}, 跳过")
+                    fail += 1
+                    continue
+            elif is_paid:
+                print(f"  [PAID-OK] {tid} 已购买过 ({price} KFB)")
             post = parse_post(html)
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(f"标题: {post['title']}\n日期: {date}\nURL: {url}\n\n")

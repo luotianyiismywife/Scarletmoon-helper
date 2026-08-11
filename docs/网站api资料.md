@@ -71,6 +71,20 @@ Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5
 - **发表时间（真实发布日期）**：楼主信息区文本 `楼主 YYYY-MM-DD HH:MM`（实测 `2025-01-26 02:31`）；正文中形如 `发表时间：YYYY-MM-DD HH:MM`
   - ⚠️ 注意：搜索结果的"发表"列显示的是**最后回复时间**，非发布日期！要真实发布日期必须进帖子页
 
+### 3.2b 付费帖机制（实测 2026-08-12）⭐
+- **付费帖特征**：正文含 `<fieldset><legend>此帖售价 N KFB,已有 M 人购买</legend>`；未购买时正文被隐藏，显示"**购买后可见本内容**"
+- **列表页不显示价格**：搜索结果/版块列表**无付费标记**，必须进帖子页才能看到"此帖售价"
+- **购买接口（未购买时页面按钮 onclick）**：
+  ```
+  GET https://bbs.kfpromax.com/job.php?action=buytopic&tid=<帖子tid>&pid=tpc&verify=<verify>
+  ```
+  - `verify` = 页面按钮 onclick 里的防伪码（如 `88fd6254`），每次打开页面可能变化
+  - 表单结构（`read.php?tid=X&sf=Y` POST）：hidden 字段 `fid` / `tid`，button `愿意购买,支付KFB`
+  - **购买按钮只在未购买时显示**；已购买则正文直接可见
+- **购买人名单**：fieldset 内 `<select name="buyers">` 列出已购者用户名
+- **购买策略（项目约定 2026-08-12）**：**售价 ≤10 KFB 的付费帖直接自动购买**（`fetch_posts.py` 已实现 `PAID_RE` 检测 + `buy_paid()` 自动购买）；>10 KFB 跳过并提示
+- 实测样本：tid=1064155「咕镇金融时报」售价 6 KFB，103 人购买（账号已购买，正文可读）
+
 ### 3.3 搜索接口：`/search.php`（实测 2026-08-05）
 **POST 全站搜索（表单提交）：**
 ```
@@ -83,6 +97,7 @@ step=2&method=AND&sch_area=0&s_type=forum&f_fid=all&orderway=lastpost&asc=DESC&k
 - `sch_area=0` 标题搜索；`s_type=forum` 版块范围
 - 需先 GET `/search.php` 建立会话（拿 PHPSESSID）再 POST
 - 响应为 HTML 结果表格：表头 `标题 | 版块 | 发表`，每行 = 标题链接(`read.php?tid=...&sf=...&keyword=...`) | 版块 | 作者+最后回复时间
+- **⭐ 扫描用途**：搜索结果的"发表"列（最后回复时间）可用于**判断帖子是否有新内容**——对比上次扫描时间即可筛选新帖（tid 不在索引）和旧帖新回复（时间更新），无需逐篇打开（详见 咕咕镇资料/06 索引「重新扫描方法」节）
 - 页脚：`共搜索到了 N 条信息 本日剩余搜索次数 M 次`（**每日搜索次数有限**，实测约 30 次/日）
 - 每页约 60 条，共 9 页
 
