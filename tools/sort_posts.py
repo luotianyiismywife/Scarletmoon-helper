@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""按真实发表时间重新排序 咕咕镇论坛内帖子.md 已读帖子记录表。
+"""按真实发表时间重新排序 docs/咕咕镇资料/06-论坛帖子索引.md 已读帖子记录表。
 
 用法:
     python tools/sort_posts.py
@@ -9,8 +9,8 @@ import os
 import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MD_PATH = os.path.join(ROOT, "咕咕镇资料", "咕咕镇论坛内帖子.md")
-TIME_PATH = os.path.join(ROOT, "咕咕镇资料", "publish_time.json")
+MD_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "06-论坛帖子索引.md")
+TIME_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "publish_time.json")
 
 ROW_RE = re.compile(
     r"^\| ([\d-]+) \| (.+?) \| (https://bbs\.kfpromax\.com/read\.php\?tid=(\d+)&sf=[0-9a-f]+) \| ([^|]+?) \|$")

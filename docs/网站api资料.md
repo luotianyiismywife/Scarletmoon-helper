@@ -149,18 +149,18 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 - 表：`moz_cookies`（含 `originAttributes` 分区列，查询时按 host LIKE 过滤即可）
 
 ### tools/fetch_posts.py
-- 读取 `咕咕镇资料/咕咕镇论坛内帖子.md` 表格中的 ⬜ 未读帖子 URL → 批量抓取正文 → 存 `咕咕镇资料/raw/{tid}.txt`
+- 读取 `docs/咕咕镇资料/06-论坛帖子索引.md` 表格中的 ⬜ 未读帖子 URL → 批量抓取正文 → 存 `docs/咕咕镇资料/raw/{tid}.txt`
 - 用 `requests.Session`：先注入 `2ed4e_*` Cookie，PHPSESSID 由服务器自动补
 - 登录校验：响应含 `action=quit` 才继续
 - 限速：默认 0.8s/篇，可 `--limit` / `--tid` / `--delay` 控制
 - 输出格式：`标题 / 日期 / URL / --- 楼层[pid] 作者 日期 --- 正文`
 
 ### 已归档辅助脚本（已删除，产出物保留）
-- ~~`analyze_posts.py`~~：曾用于按关键词分类 raw 帖子 → 产出 `咕咕镇资料/analysis.txt`（已删除脚本，清单保留）
-- ~~`make_summary.py`~~：生成每帖摘要 → 产出 `咕咕镇资料/summary.txt`（已删除脚本，摘要保留）
+- ~~`analyze_posts.py`~~：曾用于按关键词分类 raw 帖子 → 产出 `docs/咕咕镇资料/analysis.txt`（已删除脚本，清单保留）
+- ~~`make_summary.py`~~：生成每帖摘要 → 产出 `docs/咕咕镇资料/summary.txt`（已删除脚本，摘要保留）
 - ~~`mark_posts.py`~~：曾用于把表格状态标 ✅/⏭️（已删除，标记已写入文档）
-- **`fetch_publish_time.py`**（当前可用）：批量抓取每篇帖子的真实发表时间 → `咕咕镇资料/publish_time.json`
-- **`sort_posts.py`**（当前可用）：按发表时间倒序重排 `咕咕镇资料/咕咕镇论坛内帖子.md` 表格
+- **`fetch_publish_time.py`**（当前可用）：批量抓取每篇帖子的真实发表时间 → `docs/咕咕镇资料/publish_time.json`
+- **`sort_posts.py`**（当前可用）：按发表时间倒序重排 `docs/咕咕镇资料/06-论坛帖子索引.md` 表格
 
 ---
 

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""批量抓取咕咕镇帖子正文并保存到 咕咕镇资料/raw/。
+"""批量抓取咕咕镇帖子正文并保存到 docs/咕咕镇资料/raw/。
 
 用法:
-    python tools/fetch_posts.py            # 抓取 咕咕镇资料/咕咕镇论坛内帖子.md 中所有 ⬜ 未读帖子
+    python tools/fetch_posts.py            # 抓取 docs/咕咕镇资料/06-论坛帖子索引.md 中所有 ⬜ 未读帖子
     python tools/fetch_posts.py --limit 5  # 只抓前 5 篇（调试用）
     python tools/fetch_posts.py --tid 1052153   # 只抓指定 tid
 
@@ -19,8 +19,8 @@ import time
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR = os.path.join(ROOT, "咕咕镇资料", "raw")
-MD_PATH = os.path.join(ROOT, "咕咕镇资料", "咕咕镇论坛内帖子.md")
+RAW_DIR = os.path.join(ROOT, "docs", "咕咕镇资料", "raw")
+MD_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "06-论坛帖子索引.md")
 COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
 
 HEADERS = {
@@ -98,7 +98,7 @@ def parse_post(html):
 
 
 def unread_posts():
-    """从 咕咕镇论坛内帖子.md 表格解析未读帖子。"""
+    """从 06-论坛帖子索引.md 表格解析未读帖子。"""
     md = open(MD_PATH, encoding="utf-8").read()
     rows = re.findall(
         r"^\| ([\d-]+) \| (.+?) \| (https://bbs\.kfpromax\.com/read\.php\?tid=\d+[^|]*) \| (⬜) \|",
