@@ -162,6 +162,13 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 - 从 Firefox Nightly 配置文件 `cookies.sqlite`（只读）提取 Cookie → 写入 `cookie.txt`
 - 默认同时提取：论坛认证 `2ed4e_*`（`bbs.kfpromax.com`）+ 咕咕镇游戏 `fyg2019_*`（`www.momozhen.com`）
   - `python tools/get_cookies.py --forum` 仅论坛；`--game` 仅咕咕镇
+- **`--login`：账号密码登录**（不依赖浏览器）：
+  ```powershell
+  $env:KF_USER = "账号"; $env:KF_PASS = "密码"
+  python tools/get_cookies.py --login
+  ```
+  - 流程：POST `login.php?`（PHPWind 表单 `pwuser`/`pwpwd`/`step=2`，**无验证码**）→ 登录成功 → 走入口链 `fyg_sjcdwj.php?go=play&xl=2` → 自动登录链 `fyg_login.php?m=li` → 游戏主页，服务器下发新 `fyg2019_*`（含新 `endtime`）
+  - 账号密码从环境变量读，**不写代码/不入库**；适合 cookie 过期后刷新（游戏 cookie 约 1 天有效）
 - 咕咕镇游戏 Cookie：`fyg2019_gameuid/gamepw/endtime/logme`；PHPSESSID 为会话 Cookie 不落盘，由服务器首次请求自动补发
 - `cookies.sqlite` 路径：`%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\cookies.sqlite`
 - 表：`moz_cookies`（含 `originAttributes` 分区列，查询时按 host LIKE 过滤即可）

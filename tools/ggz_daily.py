@@ -2,19 +2,24 @@
 """咕咕镇日常执行脚本（按 docs/咕咕镇资料/05-脚本开发.md §4A 流程）。
 
 用法:
-    python tools/ggz_daily.py addpoint   # [0.5] 加点（自动计算剩余点分配）
-    python tools/ggz_daily.py gem        # [1] 工坊：未加工则开工
-    python tools/ggz_daily.py gemup      # [1.5] 提升宝石（红石优先）
-    python tools/ggz_daily.py beach      # [4.5] 强制刷新沙滩（耗随机装备箱）
-    python tools/ggz_daily.py pk <n>     # [5] 出击打野 n 次（默认到 3 狗牌或 20 次）
-    python tools/ggz_daily.py gift       # [6] 翻牌（无透视策略）
-    python tools/ggz_daily.py stat       # 汇总当前状态（f=12/f=21/f=10）
+    python tools/ggz_daily.py stat          # 汇总状态（战场/工坊/翻牌）
+    python tools/ggz_daily.py addpoint      # [0.5] 加点（自动分配剩余点）
+    python tools/ggz_daily.py gem           # [1] 工坊收菜+开工（加工中→收工→自动重开）
+    python tools/ggz_daily.py gemup         # [1.5] 提升宝石（检查原石存量）
+    python tools/ggz_daily.py wish          # [3] 许愿池（贝壳≥30w 且今日未许愿）
+    python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则）
+    python tools/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
+    python tools/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
+    python tools/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
+    python tools/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水）
+    python tools/ggz_daily.py all           # 一键日常（以上全部按序执行）
 
-依赖: cookie.txt（tools/get_cookies.py 生成）
+依赖: cookie.txt（tools/get_cookies.py --login 或提取生成）
 """
 import os
 import re
 import sys
+import time
 import urllib.request
 import urllib.parse
 
@@ -34,16 +39,25 @@ USER = None   # 动态: 主页提取
 ZID = None    # 动态: f=8 出战中角色
 
 
-def request(url, data=None):
+def request(url, data=None, retries=3):
+    """HTTP 请求，带重试（momozhen SSL 偶发断开）。"""
     body = urllib.parse.urlencode(data).encode() if data else None
-    req = urllib.request.Request(url, data=body, headers={
-        "Cookie": COOKIE,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
-        "Referer": BASE + "/fyg_index.php",
-        "Content-Type": "application/x-www-form-urlencoded",
-    })
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.read()
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, data=body, headers={
+                "Cookie": COOKIE,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
+                "Referer": BASE + "/fyg_index.php",
+                "Content-Type": "application/x-www-form-urlencoded",
+            })
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read()
+        except Exception as e:
+            last_err = e
+            print(f"  ⚠️ 请求重试 {attempt + 1}/{retries}: {e}")
+            time.sleep(2)
+    raise last_err
 
 
 def dec(raw):
@@ -132,20 +146,53 @@ def addpoint():
 
 
 def gem():
-    """[1] 工坊：当前未加工 → 开工；已加工 → 显示状态"""
+    """[1] 工坊收菜：加工中 → 收工拿收益 → 重新开工；未加工 → 开工。
+
+    c=30 为收工/开工切换（同按钮）。收工返回收益统计，实测收工后自动重新开工，
+    但 8-12 出现过开工状态丢失（隔天变"开始加工"），故收工后检查、未自动开工则手动开工。
+    """
     t = read_block(21)
-    if "cgamd()" in t and "开始加工" in t:
+    if "收工" in t:
+        print("工坊加工中 → 收工...")
+        r = click(30)
+        if "8小时" in r:
+            print("⏳ 开工不足 8 小时，还不能收工（保持加工）")
+            return
+        show("c=30 收工返回", r)
+        t2 = read_block(21)
+        if "开始加工" in t2:
+            print("收工后未自动开工 → 手动开工...")
+            r2 = click(30)
+            show("c=30 开工返回", r2)
+        elif "收工" in t2:
+            print("✅ 收工完成，工坊仍在加工中（异常）")
+        else:
+            print("✅ 收工完成，工坊已自动重新开工")
+    elif "开始加工" in t:
+        print("工坊未加工 → 开工...")
         r = click(30)
         show("c=30 开工返回", r)
-        t2 = read_block(21)
-        if "收工" in t2:
-            print("✅ 已开工")
-        else:
-            print("⚠️ 开工后状态未变: " + strip_tags(t2)[:200])
-    elif "收工" in t:
-        print("工坊正在加工中，无需开工")
     else:
         print("⚠️ 未知工坊状态: " + strip_tags(t)[:200])
+
+
+def wish():
+    """[3] 许愿池：f=19 判断今日是否已许愿 + 主页贝壳≥30w → c=18 许愿 1 次。"""
+    t = read_block(19)
+    fields = t.strip().split("#")
+    if len(fields) >= 3 and fields[2] != "0":
+        print(f"今日已许愿 {fields[2]} 次，跳过")
+        return
+    # 主页贝壳
+    home = dec(request(BASE + "/fyg_index.php"))
+    m = re.search(r"贝壳[^>]*>\s*(\d+)", home)
+    coins = int(m.group(1)) if m else 0
+    print(f"贝壳: {coins}")
+    if coins >= 300000:
+        r = click(18, id=1)
+        show("c=18 许愿返回", r)
+    else:
+        print("贝壳 < 30w，跳过许愿")
 
 
 def gemup():
@@ -169,13 +216,99 @@ def gemup():
     print("跳过提升宝石（无原石存量）")
 
 
+def parse_equips(html, want_id=False):
+    """解析装备按钮列表（f=1 沙滩 / f=6 身上通用）。
+
+    每个装备按钮结构（2026-08-12 实测 f=6）：
+      <button ... data-content="<p>词条<span class='pull-right bg-*'>&nbsp;150%&nbsp;</span></p>..."
+              title="Lv.<span>100</span> 装备名" ...><img src="ys/icon/z2101_4.gif">...
+    沙滩版额外含 zbtip('ID','4')。
+    返回 [{icon, quality, name, level, total, mystery, bid}]
+      icon: 部位码 zXXXX；quality: 品质数字；total: 词条总值(% 之和)；bid: 沙滩拾取 id
+    """
+    result = []
+    for btn in re.findall(r"<button[^>]*>(.*?)</button>", html, re.S):
+        if "ys/icon/z" not in btn:
+            continue
+        m = re.search(r"ys/icon/z(\d{4})(?:_(\d))?\.gif", btn)
+        icon, quality = (m.group(1), int(m.group(2)) if m and m.group(2) else 0) if m else ("", 0)
+        m = re.search(r"title=\"Lv\.<span[^>]*>(\d+)</span>\s*([^\"]*)\"", btn)
+        level, name = (m.group(1), m.group(2).strip()) if m else ("?", "?")
+        total = 0.0
+        for m in re.finditer(r"pull-right bg-\w+[^>]*>(?:&nbsp;|\s)*(\d+(?:\.\d+)?)%", btn):
+            total += float(m.group(1))
+        mystery = "[神秘属性]" in btn or "神秘属性" in btn
+        m = re.search(r"zbtip\('(\d+)','4'\)", btn)
+        bid = m.group(1) if m else None
+        result.append({"icon": icon, "quality": quality, "name": name,
+                       "level": level, "total": total, "mystery": mystery, "bid": bid})
+    return result
+
+
+def equip_decision(it, worn):
+    """沙滩装备决策（05 §4.5 规则简化版）。返回 'take' / 'clear'。
+
+    ① 橙装（总值≥516%）→ 收（备其他角色）
+    ② 含神秘 → 必收
+    ③ 品质≥3 → 收（可熔炼为护身符）
+    ④ 同部位对比（icon 前 3 位）：沙滩总值 > 身上同部位 → 收；无同部位 → 收
+    ⑤ 其余 → 清
+    """
+    if it["total"] >= 516:
+        return "take"
+    if it["mystery"]:
+        return "take"
+    if it["quality"] >= 3:
+        return "take"
+    # 同部位：icon 前 3 位（z21x武器/z22x手环/z23x衣服/z24x饰品）
+    slot = it["icon"][:3] if len(it["icon"]) >= 3 else ""
+    same = [w for w in worn if w["icon"][:3] == slot]
+    if not same:
+        return "take"  # 空部位直接收
+    best = max(w["total"] for w in same)
+    return "take" if it["total"] > best else "clear"
+
+
 def beach():
-    """[4.5] 强制刷新沙滩（耗 1 随机装备箱）"""
+    """[4] 沙滩收取 + 清理（4.5 规则）。
+
+    流程：读 f=1 沙滩 + f=6 身上 → 逐件决策 → 先 c=1 拾取要收的 → 再 c=20 清理剩余。
+    ⚠️ 沙滩 id 拾取后重排：逐件拾取后重新读 f=1 抓新 id。
+    """
+    t1 = read_block(1)
+    items = parse_equips(t1, want_id=True)
+    if not items:
+        print("沙滩空，无装备")
+        return
+    worn = parse_equips(read_block(6))
+    print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
+    for it in items:
+        print(f"  {it['name']} {it['quality']}等 {it['total']:.0f}% icon={it['icon']} id={it['bid']}"
+              f"{' 神秘' if it['mystery'] else ''}")
+
+    take_ids, clear_count = [], 0
+    for it in items:
+        if it["bid"] is None:
+            continue
+        if equip_decision(it, worn) == "take":
+            take_ids.append(it["bid"])
+        else:
+            clear_count += 1
+    print(f"决策: 拾取 {len(take_ids)} 件, 清理 {clear_count} 件")
+
+    for bid in take_ids:
+        r = click(1, id=bid)
+        show(f"c=1 拾取 id={bid}", r, 80)
+    if clear_count > 0:
+        r = click(20)
+        show("c=20 清理沙滩", r)
+
+
+def beach_refresh():
+    """[4.5] 强制刷新沙滩（耗 1 随机装备箱，c=12）→ 刷新后按 4.5 规则再筛一轮"""
     r = click(12)
     show("c=12 刷新沙滩返回", r)
-    t = read_block(1)
-    items = re.findall(r"title=\"Lv\.([^\"]*?)\"", t)
-    print(f"刷新后沙滩装备数: {len(items)}")
+    beach()
 
 
 def fight(target=1):
@@ -211,13 +344,13 @@ def parse_pk():
     }
 
 
-def pk(max_fights=20):
-    """[5] 出击打野直到 3 狗牌或 max_fights 次"""
+def pk(max_fights=20, full=False):
+    """[5] 出击打野。默认拿满 3 狗牌即停；--full 打满 max_fights 次。"""
     for i in range(1, max_fights + 1):
         st = parse_pk()
         print(f"\n--- 出击 #{i} 前状态: 段位{st['段位']} {st['进度']} 狗牌{st['狗牌']}/{st['出击']} 连胜{st['连胜']} 连败{st['连败']} ---")
-        if int(st["狗牌"]) >= 3:
-            print("✅ 已拿满 3 狗牌，停止出击")
+        if not full and int(st["狗牌"]) >= 3:
+            print("✅ 已拿满 3 狗牌，停止出击（--full 可打满）")
             break
         kind, r = fight(1)
         print(f"出击结果: {kind}")
@@ -231,6 +364,12 @@ def pk(max_fights=20):
         print(f"出击后: 狗牌{st['狗牌']} 出击{st['出击']} 连胜{st['连胜']} 连败{st['连败']}")
     print("\n=== 出击结束 ===")
     print(parse_pk())
+
+
+def bonus():
+    """[7] 额外奖励：c=13&id=1 耗 1 体能刺激药水再领一次翻牌奖励。"""
+    r = click(13, id=1)
+    show("c=13&id=1 额外奖励", r)
 
 
 def gift():
@@ -296,6 +435,23 @@ def gift():
     print("翻牌区已全部翻开但未凑齐同色（异常情况）")
 
 
+def all_daily():
+    """一键日常（按 05 §4A 顺序，逐步容错）：
+    addpoint → gem(收菜+开工) → gemup → wish → beach → pk → gift → bonus
+    """
+    steps = [("加点", addpoint), ("工坊收菜", gem), ("宝石提升", gemup),
+             ("许愿池", wish), ("沙滩收取", beach), ("出击打野", pk),
+             ("翻牌", gift), ("额外奖励", bonus)]
+    for name, fn in steps:
+        print(f"\n{'=' * 20} [{name}] {'=' * 20}")
+        try:
+            fn()
+        except Exception as e:
+            print(f"⚠️ [{name}] 出错: {e}，继续下一步")
+    print("\n=== 今日日常完成 ===")
+    stat()
+
+
 def stat():
     print("=== 战场状态 ===")
     print(parse_pk())
@@ -323,13 +479,23 @@ def main():
         gem()
     elif cmd == "gemup":
         gemup()
+    elif cmd == "wish":
+        wish()
     elif cmd == "beach":
         beach()
+    elif cmd == "refresh":
+        beach_refresh()
     elif cmd == "pk":
-        n = int(sys.argv[2]) if len(sys.argv) > 2 else 20
-        pk(n)
+        full = "--full" in sys.argv
+        args = [a for a in sys.argv[2:] if not a.startswith("--")]
+        n = int(args[0]) if args else 20
+        pk(n, full=full)
     elif cmd == "gift":
         gift()
+    elif cmd == "bonus":
+        bonus()
+    elif cmd == "all":
+        all_daily()
     else:
         stat()
 
