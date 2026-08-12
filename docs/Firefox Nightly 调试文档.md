@@ -183,7 +183,7 @@ flowchart TD
 
 1. **启动**：`Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList @("--marionette","--remote-debugging-port","9222")`
 2. **选 profile**（弹窗口）：加 `-P` 参数启动 → 弹出"选择用户配置文件"窗口 → 手动点选 `default-nightly`（含咕咕镇登录态）
-3. **确认登录态**：`mcp__mozilla_fire_list_pages` → 打开 `https://www.momozhen.com/`，页面应显示用户名 `yeybsghhz`
+3. **确认登录态**：`mcp__mozilla_fire_list_pages` → 打开 `https://www.momozhen.com/`，页面应显示用户名 `<用户名>`
 4. **抓接口**：用 `evaluate_script` 发 fetch 请求，或手动点按钮 + 看网络面板
 
 ---

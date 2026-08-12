@@ -24,7 +24,7 @@
 
 | Cookie | 说明 |
 |--------|------|
-| `2ed4e_winduser` | **认证凭据**（HttpOnly，值形如 `BAVcD1c...%3D%3D`），登录态核心 |
+| `2ed4e_winduser` | **认证凭据**（HttpOnly，值形如 `<base64凭据>`），登录态核心 |
 | `2ed4e_ck_info` | 登录信息 |
 | `2ed4e_threadlog` | 浏览记录 |
 | `2ed4e_lastvisit` | 最后访问时间（URL 编码：`时间戳\t时间戳\t%2F路径`） |
@@ -159,7 +159,10 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 ## 5. Python 批量抓取方案（本项目已实现）
 
 ### tools/get_cookies.py
-- 从 Firefox Nightly 配置文件 `cookies.sqlite`（只读）提取 `2ed4e_*` Cookie → 写入 `cookie.txt`
+- 从 Firefox Nightly 配置文件 `cookies.sqlite`（只读）提取 Cookie → 写入 `cookie.txt`
+- 默认同时提取：论坛认证 `2ed4e_*`（`bbs.kfpromax.com`）+ 咕咕镇游戏 `fyg2019_*`（`www.momozhen.com`）
+  - `python tools/get_cookies.py --forum` 仅论坛；`--game` 仅咕咕镇
+- 咕咕镇游戏 Cookie：`fyg2019_gameuid/gamepw/endtime/logme`；PHPSESSID 为会话 Cookie 不落盘，由服务器首次请求自动补发
 - `cookies.sqlite` 路径：`%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\cookies.sqlite`
 - 表：`moz_cookies`（含 `originAttributes` 分区列，查询时按 host LIKE 过滤即可）
 

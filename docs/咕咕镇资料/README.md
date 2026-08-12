@@ -24,7 +24,7 @@
 
 - 论坛 API（签到/搜索/抓取）：[网站api资料.md](../网站api资料.md)
 - Firefox 调试环境（MCP 抓包流程）：[Firefox Nightly 调试文档.md](../Firefox Nightly 调试文档.md)
-- 抓取工具：`tools/fetch_posts.py` / `fetch_publish_time.py` / `sort_posts.py` / `get_cookies.py`（用法见 网站api资料.md 第 5 章）
+- 抓取工具：`tools/fetch_posts.py` / `fetch_publish_time.py` / `sort_posts.py` / `get_cookies.py`（论坛+咕咕镇 Cookie，用法见 网站api资料.md 第 5 章）
 
 ## 维护约定
 
