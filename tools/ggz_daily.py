@@ -385,7 +385,8 @@ def gift():
     def parse_gift():
         """返回 12 个位置的牌状态: [{pos, name, flipped, color}]"""
         t = read_block(10)
-        btns = re.findall(r"<button[^>]*>(.*?)</button>", t, re.S)
+        # 捕获完整 <button ...>...</button>（含 onclick/class 属性）
+        btns = re.findall(r"<button[^>]*>.*?</button>", t, re.S)
         result = []
         for i, btn in enumerate(btns, 1):
             cls = re.search(r'class="([^"]*)"', btn)
