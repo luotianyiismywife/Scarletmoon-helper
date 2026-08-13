@@ -85,7 +85,7 @@ Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5
 - **购买策略（项目约定 2026-08-12）**：**售价 ≤10 KFB 的付费帖直接自动购买**（`fetch_posts.py` 已实现 `PAID_RE` 检测 + `buy_paid()` 自动购买）；>10 KFB 跳过并提示
 - 实测样本：tid=1064155「咕镇金融时报」售价 6 KFB，103 人购买（账号已购买，正文可读）
 
-### 3.3 搜索接口：`/search.php`（实测 2026-08-05）
+### 3.3 搜索接口：`/search.php`（实测 2026-08-05；2026-08-13 补充实测）
 **POST 全站搜索（表单提交）：**
 ```
 POST https://bbs.kfpromax.com/search.php?
@@ -94,18 +94,29 @@ Content-Type: application/x-www-form-urlencoded
 step=2&method=AND&sch_area=0&s_type=forum&f_fid=all&orderway=lastpost&asc=DESC&keyword=<GBK编码>&pwuser=&submit=全站搜索
 ```
 - `keyword` 必须按 **GBK** URL 编码（如"咕咕镇"=`%B9%BE%B9%BE%D5%F2`）；用 UTF-8 会搜到乱码/无结果
+- **⭐ 编码大坑（2026-08-13 实测）**：Python `requests` 用 dict 提交表单时默认按 **UTF-8** 编码 → keyword 乱码 → 服务器**静默失败**，返回的不是搜索结果页而是含侧栏"最新帖"的普通页面（看起来像 200 成功）。必须**手工拼 raw body**：`quote(kw.encode('gbk'))` 后拼进 `data=` 字符串（见 `tools/search_posts.py`）
+- **搜索需登录态**：cookie 失效时搜索同样静默返回首页（响应无 `action=quit`、len≈5000）；先确认登录态再搜索
 - `sch_area=0` 标题搜索；`s_type=forum` 版块范围
 - 需先 GET `/search.php` 建立会话（拿 PHPSESSID）再 POST
 - 响应为 HTML 结果表格：表头 `标题 | 版块 | 发表`，每行 = 标题链接(`read.php?tid=...&sf=...&keyword=...`) | 版块 | 作者+最后回复时间
-- **⭐ 扫描用途**：搜索结果的"发表"列（最后回复时间）可用于**判断帖子是否有新内容**——对比上次扫描时间即可筛选新帖（tid 不在索引）和旧帖新回复（时间更新），无需逐篇打开（详见 咕咕镇资料/06 索引「重新扫描方法」节）
+- **结果链接特征**：真正的搜索结果链接带 `&keyword=...` 参数——用它区分搜索结果与页面侧栏的最新帖列表（解析时只认带 keyword 的 `read.php` 链接）
+- **⭐ 扫描用途**：搜索结果的"发表"列（最后回复时间）可用于**判断帖子是否有新内容**——对比上次扫描时间即可筛选新帖（tid 不在索引）和旧帖新回复（时间更新），无需逐篇打开（详见 咕咕镇-新争夺资料/06 索引「重新扫描方法」节）
 - 页脚：`共搜索到了 N 条信息 本日剩余搜索次数 M 次`（**每日搜索次数有限**，实测约 30 次/日）
-- 每页约 60 条，共 9 页
+- 每页约 60 条；结果 ≤60 条时只有 1 页（实测："新争夺"58 条 1 页、"旧争夺"355 条多页）
+- **工具**：`tools/search_posts.py --kw 关键词 [--pages N] [--json out.json] [--dump xx.html]`（GBK 编码 + 翻页 + 去重 + JSON 输出）
 
 **翻页（GET）：**
 ```
 GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<搜索会话ID>&page=N
 ```
 - `sid` = 搜索会话 ID，从第一次搜索结果页的分页链接里提取（随会话变化）
+
+### 3.3b 帖子图片提取（2026-08-13 实测）
+- PHPWind 帖内 `<img>` 的 onclick 含 `this.width>800`，其中的 `>` 会**破坏标签结构**——用 `<[^>]+>` 剥标签会提前截断，正文里残留 `=800) window.open('...` 碎片
+- 图片 URL 两个来源：① `<img ... src="URL">` 属性；② onclick 里的 `window.open('URL')`（大图点击放大）
+- 需排除表情图（路径含 `post/smile`）；相对路径补全为 `https://bbs.kfpromax.com/...`
+- 论坛附件图路径特征：`/<数字>/Mon_YYMM/...`（如 `1786625453/Mon_2...`）；外站图床常见 `i.loli.net` / `s1.ax1x.com` / `p.inari.site` 等（外站图可能已失效）
+- **工具**：`fetch_posts.py --images`：提取图片 URL 写入正文文件 `Images:` 节 + 下载到 `raw/img/<tid>/`（已抓过的帖自动回填）
 
 ### 3.4 用户资料：`/profile.php`
 - `profile.php?action=show&uid=XXX` 查看资料
@@ -173,19 +184,27 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 - `cookies.sqlite` 路径：`%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\cookies.sqlite`
 - 表：`moz_cookies`（含 `originAttributes` 分区列，查询时按 host LIKE 过滤即可）
 
+### tools/search_posts.py（2026-08-13 新增）
+- 全站搜索标题关键字，抓全部结果页，输出 tid/标题/URL/最后回复时间
+- `python tools/search_posts.py --kw 旧争夺 [--pages N] [--json out.json] [--dump xx.html]`
+- 已内置 GBK 编码修复（手工拼 raw body）、keyword 链接过滤、翻页、去重；探测时先 `--pages 1` 省搜索次数
+
 ### tools/fetch_posts.py
-- 读取 `docs/咕咕镇资料/06-论坛帖子索引.md` 表格中的 ⬜ 未读帖子 URL → 批量抓取正文 → 存 `docs/咕咕镇资料/raw/{tid}.txt`
+- 读取索引表格中的 ⬜ 未读帖子 URL → 批量抓取正文 → 存 `docs/<资料目录>/raw/{tid}.txt`
+- **`--dir` / `--index` 指定资料目录与索引文件**（默认 `咕咕镇-新争夺资料/06-论坛帖子索引.md`；旧争夺用 `--dir 旧争夺资料 --index 03-论坛帖子索引.md`）
 - 用 `requests.Session`：先注入 `2ed4e_*` Cookie，PHPSESSID 由服务器自动补
 - 登录校验：响应含 `action=quit` 才继续
 - 限速：默认 0.8s/篇，可 `--limit` / `--tid` / `--delay` 控制
-- 输出格式：`标题 / 日期 / URL / --- 楼层[pid] 作者 日期 --- 正文`
+- 输出格式：`标题 / 日期 / URL / --- 楼层[pid] 作者 日期 --- 正文 / Images: 图片URL列表`
+- **抓正文时顺手记录真实发表时间** → `publish_time.json`（省一轮 fetch_publish_time）
+- **`--images`**：提取帖内图片 URL 写入正文文件 + 下载到 `raw/img/<tid>/`（已抓过的帖自动回填；见 §3.3b）
 
 ### 已归档辅助脚本（已删除，产出物保留）
-- ~~`analyze_posts.py`~~：曾用于按关键词分类 raw 帖子 → 产出 `docs/咕咕镇资料/analysis.txt`（已删除脚本，清单保留）
-- ~~`make_summary.py`~~：生成每帖摘要 → 产出 `docs/咕咕镇资料/summary.txt`（已删除脚本，摘要保留）
+- ~~`analyze_posts.py`~~：曾用于按关键词分类 raw 帖子 → 产出 `docs/咕咕镇-新争夺资料/analysis.txt`（已删除脚本，清单保留）
+- ~~`make_summary.py`~~：曾用于生成每帖摘要 → 产出 `docs/咕咕镇-新争夺资料/summary.txt`（已删除脚本，摘要保留）
 - ~~`mark_posts.py`~~：曾用于把表格状态标 ✅/⏭️（已删除，标记已写入文档）
-- **`fetch_publish_time.py`**（当前可用）：批量抓取每篇帖子的真实发表时间 → `docs/咕咕镇资料/publish_time.json`
-- **`sort_posts.py`**（当前可用）：按发表时间倒序重排 `docs/咕咕镇资料/06-论坛帖子索引.md` 表格
+- **`fetch_publish_time.py`**（当前可用）：批量抓取每篇帖子的真实发表时间 → `docs/<资料目录>/publish_time.json`（支持 `--dir`/`--index`；fetch_posts.py 已顺手记录，通常无需单独跑）
+- **`sort_posts.py`**（当前可用）：按发表时间倒序重排索引表格（支持 `--dir`/`--index`；兼容带 ⚠️ 标记的行）
 
 ---
 
@@ -197,4 +216,6 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 4. **PHPSESSID 不落盘**：不用手工拼，用 Session 自动管理
 5. **SSL 偶发中断**：Python 原生 urllib 偶发 `SSL: UNEXPECTED_EOF`（疑似 TLS 指纹/频率限制），换 requests 或降低频率可缓解
 6. **帖子抓取正文**：以 `菜单</a>` 后到 `</table>` 前为准，避免混入页面底部快速回复框
+7. **img 标签 onclick 破坏结构**：帖内 `<img onclick="if(this.width>800)...">` 的 `>` 会让 `<[^>]+>` 类正则提前截断；提取图片要同时匹配 `src=` 属性和 `window.open('...')`（见 §3.3b）
+8. **搜索静默失败**：keyword 编码错误（UTF-8）或未登录时，搜索不报错而是返回普通页面/首页；判定依据 = 响应里有无带 `keyword=` 的 `read.php` 链接（见 §3.3）
 7. **已删除/关闭的帖子**：返回"此帖被管理员关闭"（正文为空），属正常

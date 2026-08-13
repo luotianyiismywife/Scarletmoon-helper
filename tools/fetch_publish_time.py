@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""从 docs/咕咕镇资料/06-论坛帖子索引.md 表格提取所有 tid+URL, 逐个 GET 帖子页提取真实发表时间。
+"""从 docs/<资料目录>/<索引>.md 表格提取所有 tid+URL, 逐个 GET 帖子页提取真实发表时间。
 
 用法:
     python tools/fetch_publish_time.py --limit 5   # 调试: 只处理前5篇
-    python tools/fetch_publish_time.py             # 全部 500 篇
+    python tools/fetch_publish_time.py             # 全部(咕咕镇-新争夺资料/06-论坛帖子索引.md)
+    python tools/fetch_publish_time.py --dir 旧争夺资料 --index 03-论坛帖子索引.md
 
 输出:
-    docs/咕咕镇资料/publish_time.json  {tid: "YYYY-MM-DD HH:MM"}
+    docs/<资料目录>/publish_time.json  {tid: "YYYY-MM-DD HH:MM"}
 """
 import argparse
 import json
@@ -18,8 +19,10 @@ import time
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MD_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "06-论坛帖子索引.md")
-OUT_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "publish_time.json")
+DEFAULT_DIR = "咕咕镇-新争夺资料"
+DEFAULT_INDEX = "06-论坛帖子索引.md"
+MD_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, DEFAULT_INDEX)
+OUT_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, "publish_time.json")
 COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
 
 HEADERS = {
@@ -83,10 +86,15 @@ def collect_tids():
 
 
 def main():
+    global MD_PATH, OUT_PATH
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--delay", type=float, default=0.6)
+    ap.add_argument("--dir", default=DEFAULT_DIR, help="资料目录名(docs/下)")
+    ap.add_argument("--index", default=DEFAULT_INDEX, help="索引文件名")
     args = ap.parse_args()
+    MD_PATH = os.path.join(ROOT, "docs", args.dir, args.index)
+    OUT_PATH = os.path.join(ROOT, "docs", args.dir, "publish_time.json")
 
     posts = collect_tids()
     if args.limit:

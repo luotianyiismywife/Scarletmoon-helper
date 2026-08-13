@@ -1,22 +1,34 @@
 # -*- coding: utf-8 -*-
-"""按真实发表时间重新排序 docs/咕咕镇资料/06-论坛帖子索引.md 已读帖子记录表。
+"""按真实发表时间重新排序 docs/<资料目录>/<索引>.md 已读帖子记录表。
 
 用法:
     python tools/sort_posts.py
+    python tools/sort_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md
 """
+import argparse
 import json
 import os
 import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MD_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "06-论坛帖子索引.md")
-TIME_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "publish_time.json")
+DEFAULT_DIR = "咕咕镇-新争夺资料"
+DEFAULT_INDEX = "06-论坛帖子索引.md"
+MD_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, DEFAULT_INDEX)
+TIME_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, "publish_time.json")
 
 ROW_RE = re.compile(
-    r"^\| ([\d-]+) \| (.+?) \| (https://bbs\.kfpromax\.com/read\.php\?tid=(\d+)&sf=[0-9a-f]+) \| ([^|]+?) \|$")
+    r"^\| ([\d-]+)(?: ⚠️)? \| (.+?) \| (https://bbs\.kfpromax\.com/read\.php\?tid=(\d+)&sf=[0-9a-f]+) \| ([^|]+?) \|$")
 
 
 def main():
+    global MD_PATH, TIME_PATH
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", default=DEFAULT_DIR, help="资料目录名(docs/下)")
+    ap.add_argument("--index", default=DEFAULT_INDEX, help="索引文件名")
+    args = ap.parse_args()
+    MD_PATH = os.path.join(ROOT, "docs", args.dir, args.index)
+    TIME_PATH = os.path.join(ROOT, "docs", args.dir, "publish_time.json")
+
     times = json.load(open(TIME_PATH, encoding="utf-8"))
     lines = open(MD_PATH, encoding="utf-8").read().split("\n")
 

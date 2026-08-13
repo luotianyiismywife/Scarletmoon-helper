@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""批量抓取咕咕镇帖子正文并保存到 docs/咕咕镇资料/raw/。
+"""批量抓取帖子正文并保存到 docs/<资料目录>/raw/。
 
 用法:
-    python tools/fetch_posts.py            # 抓取 docs/咕咕镇资料/06-论坛帖子索引.md 中所有 ⬜ 未读帖子
+    python tools/fetch_posts.py            # 抓取 咕咕镇-新争夺资料/06-论坛帖子索引.md 中所有 ⬜ 未读帖子
     python tools/fetch_posts.py --limit 5  # 只抓前 5 篇（调试用）
     python tools/fetch_posts.py --tid 1052153   # 只抓指定 tid
+    python tools/fetch_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md   # 抓旧争夺
 
 付费帖处理（2026-08-12）:
     - 检测 "此帖售价 N KFB" 特征
@@ -16,6 +17,7 @@
 """
 import argparse
 import html as htmllib
+import json
 import os
 import re
 import sys
@@ -24,9 +26,12 @@ import time
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR = os.path.join(ROOT, "docs", "咕咕镇资料", "raw")
-MD_PATH = os.path.join(ROOT, "docs", "咕咕镇资料", "06-论坛帖子索引.md")
+DEFAULT_DIR = "咕咕镇-新争夺资料"
+DEFAULT_INDEX = "06-论坛帖子索引.md"
+RAW_DIR = os.path.join(ROOT, "docs", DEFAULT_DIR, "raw")
+MD_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, DEFAULT_INDEX)
 COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
+BASE = "https://bbs.kfpromax.com"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0",
@@ -69,6 +74,33 @@ def fetch_html(session, url):
     if "action=quit" not in r.text:
         raise RuntimeError("未登录 (无退出链接)")
     return r.text
+
+
+# 发表时间提取(与 fetch_publish_time.py 相同规则): 抓正文时顺手记录, 省一轮请求
+TIME_PATTERNS = [
+    re.compile(r"楼主\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})"),
+    re.compile(r"发表时间[：:]\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})"),
+]
+
+
+def extract_publish_time(html):
+    for pat in TIME_PATTERNS:
+        m = pat.search(html)
+        if m:
+            return m.group(1)
+    return None
+
+
+def load_pub_times():
+    """载入 docs/<dir>/publish_time.json (断点续传用), 不存在返回 {}。"""
+    p = os.path.join(os.path.dirname(RAW_DIR), "publish_time.json")
+    if os.path.exists(p):
+        return json.load(open(p, encoding="utf-8")), p
+    return {}, p
+
+
+def save_pub_times(times, path):
+    json.dump(times, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
 
 PAID_RE = re.compile(r"此帖售价 (\d+(?:\.\d+)?) KFB,已有 (\d+) 人购买")
@@ -118,19 +150,90 @@ def buy_paid(session, buy_url, tid):
     return r.status_code == 200, strip_tags(r.text)[:120]
 
 
+# ---------- 图片提取 ----------
+# PHPWind 的 <img> onclick 含 this.width>800, ">" 会破坏标签结构, 需多模式捕获
+IMG_SRC_RE = re.compile(r'<img[^>]*?\bsrc\s*=\s*["\']?([^"\'\s>]+)', re.I)
+WINOPEN_RE = re.compile(r"window\.open\(\s*['\"]([^'\"]+)['\"]")
+IMG_EXT_RE = re.compile(r"\.(?:jpe?g|png|gif|webp|bmp)(?:[?#]|$)", re.I)
+SMILIES_RE = re.compile(r"(?:post/smile|images/post/smile)/", re.I)
+
+
+def resolve_img_url(u):
+    """相对路径补全为绝对 URL; 无效返回 None。"""
+    u = u.strip()
+    if not u or u.startswith("data:"):
+        return None
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("http"):
+        return u
+    if u.startswith("/"):
+        return BASE + u
+    return BASE + "/" + u
+
+
+def extract_images(html):
+    """提取帖子页所有图片 URL(去重保序, 排除表情图)。"""
+    urls = []
+    seen = set()
+
+    def add(u):
+        full = resolve_img_url(u)
+        if full and full not in seen and not SMILIES_RE.search(full):
+            seen.add(full)
+            urls.append(full)
+
+    for m in IMG_SRC_RE.finditer(html):
+        add(m.group(1))
+    for m in WINOPEN_RE.finditer(html):
+        u = m.group(1)
+        if IMG_EXT_RE.search(u) or "/Mon_" in u or "attachment" in u:
+            add(u)
+    return urls
+
+
+def download_images(session, urls, img_dir, tid):
+    """下载图片到 img_dir, 返回 (成功数, 失败数)。已存在则跳过。"""
+    os.makedirs(img_dir, exist_ok=True)
+    ok = fail = 0
+    for i, u in enumerate(urls, 1):
+        ext_m = re.search(r"\.(jpe?g|png|gif|webp|bmp)(?:[?#]|$)", u, re.I)
+        ext = "." + ext_m.group(1).lower() if ext_m else ".img"
+        out = os.path.join(img_dir, f"{i:02d}{ext}")
+        if os.path.exists(out) and os.path.getsize(out) > 0:
+            ok += 1
+            continue
+        try:
+            r = session.get(u, timeout=20)
+            if r.status_code == 200 and len(r.content) > 100:
+                with open(out, "wb") as f:
+                    f.write(r.content)
+                ok += 1
+            else:
+                fail += 1
+                print(f"    [IMG-FAIL] {tid} #{i} HTTP {r.status_code} {u[:80]}")
+        except Exception as e:
+            fail += 1
+            print(f"    [IMG-FAIL] {tid} #{i} {type(e).__name__} {u[:80]}")
+        time.sleep(0.3)
+    return ok, fail
+
+
 def parse_post(html):
-    """解析帖子页: 返回 {title, floors: [{id, author, date, text}]}"""
+    """解析帖子页: 返回 {title, floors: [{id, author, date, text}], images: [url]}"""
     m = re.search(r"<title>(.*?)</title>", html)
     title = m.group(1).strip() if m else "?"
     title = re.sub(r"\|.*?- 绯月ScarletMoon$", "", title).strip()
 
     floors = []
+    images = []
     # 楼主
     m = re.search(r'<div class="readtext"[^>]*id="pidtpc"[^>]*>(.*?)(?=<div class="readtext"|$)', html, re.S)
     # 通用: 匹配所有 readtext 块
     blocks = list(re.finditer(r'<div class="readtext"[^>]*id="pid([^"]+)"[^>]*>(.*?)(?=<div class="readtext"|$)', html, re.S))
     if not blocks:
-        return {"title": title, "floors": []}
+        return {"title": title, "floors": [], "images": []}
+    seen_img = set()
     for b in blocks:
         pid = b.group(1)
         seg = b.group(2)
@@ -142,11 +245,17 @@ def parse_post(html):
         date = dm.group(1) if dm else ""
         # 正文: 取 "菜单" 链接之后、楼层表格结束(</table>)之前的内容
         cm = re.search(r"class=\"readcza\">菜单</a>\s*(.*?)(?=</table>)", seg, re.S)
-        text = strip_tags(cm.group(1)) if cm else ""
+        body_html = cm.group(1) if cm else seg
+        text = strip_tags(body_html)
         if not text:
             text = strip_tags(seg)[-500:]
+        # 图片: 仅从楼层正文块提取
+        for u in extract_images(body_html):
+            if u not in seen_img:
+                seen_img.add(u)
+                images.append(u)
         floors.append({"id": pid, "author": author, "date": date, "text": text})
-    return {"title": title, "floors": floors}
+    return {"title": title, "floors": floors, "images": images}
 
 
 def unread_posts():
@@ -159,11 +268,18 @@ def unread_posts():
 
 
 def main():
+    global RAW_DIR, MD_PATH
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--tid", type=int, default=0)
     ap.add_argument("--delay", type=float, default=0.8, help="请求间隔秒")
+    ap.add_argument("--dir", default=DEFAULT_DIR, help="资料目录名(docs/下)")
+    ap.add_argument("--index", default=DEFAULT_INDEX, help="索引文件名")
+    ap.add_argument("--images", action="store_true",
+                    help="提取图片URL写入正文文件, 并下载到 raw/img/<tid>/ (已抓过的帖也会回填)")
     args = ap.parse_args()
+    RAW_DIR = os.path.join(ROOT, "docs", args.dir, "raw")
+    MD_PATH = os.path.join(ROOT, "docs", args.dir, args.index)
 
     posts = unread_posts()
     if args.tid:
@@ -175,16 +291,40 @@ def main():
     os.makedirs(RAW_DIR, exist_ok=True)
 
     session = make_session()
-    ok = fail = 0
+    pub_times, pub_path = load_pub_times()
+    ok = fail = img_total = 0
     for date, title, url in posts:
         tid = re.search(r"tid=(\d+)", url).group(1)
         out_path = os.path.join(RAW_DIR, f"{tid}.txt")
         if os.path.exists(out_path):
-            print(f"  [跳过] {tid} 已存在")
+            # 已抓过: 若开启 --images 且尚未记录图片, 回填图片信息
+            existed = open(out_path, encoding="utf-8").read()
+            if args.images and "\nImages:\n" not in existed:
+                try:
+                    html = fetch_html(session, url)
+                    imgs = parse_post(html)["images"]
+                    with open(out_path, "a", encoding="utf-8") as f:
+                        f.write("\nImages:\n")
+                        for i, u in enumerate(imgs, 1):
+                            f.write(f"  [{i}] {u}\n")
+                    if imgs:
+                        img_dir = os.path.join(RAW_DIR, "img", tid)
+                        iok, ifail = download_images(session, imgs, img_dir, tid)
+                        img_total += iok
+                        print(f"  [回填] {tid} 图片 {iok} 张 (失败 {ifail})")
+                    time.sleep(args.delay)
+                except Exception as e:
+                    print(f"  [回填FAIL] {tid}: {e}")
+            else:
+                print(f"  [跳过] {tid} 已存在")
             ok += 1
             continue
         try:
             html = fetch_html(session, url)
+            # 顺手记录真实发表时间(省一轮 fetch_publish_time)
+            pt = extract_publish_time(html)
+            if pt:
+                pub_times[tid] = pt
             # 付费帖检测 + 自动购买
             is_paid, price, buy_url = check_paid(html, tid)
             if is_paid and buy_url:
@@ -207,16 +347,30 @@ def main():
                 for fl in post["floors"]:
                     f.write(f"--- 楼层[{fl['id']}] {fl['author']} {fl['date']} ---\n")
                     f.write(fl["text"] + "\n\n")
+                if post["images"]:
+                    f.write("\nImages:\n")
+                    for i, u in enumerate(post["images"], 1):
+                        f.write(f"  [{i}] {u}\n")
+            if args.images and post["images"]:
+                img_dir = os.path.join(RAW_DIR, "img", tid)
+                iok, ifail = download_images(session, post["images"], img_dir, tid)
+                img_total += iok
             n = len(post["floors"])
             first = post["floors"][0]["text"][:60].replace("\n", " ") if post["floors"] else ""
             print(f"  [OK] {tid} 楼层={n} 楼主: {first}")
             ok += 1
+            if ok % 20 == 0:
+                save_pub_times(pub_times, pub_path)
         except Exception as e:
             print(f"  [FAIL] {tid} {title}: {e}")
             fail += 1
         time.sleep(args.delay)
 
+    save_pub_times(pub_times, pub_path)
     print(f"\n完成: 成功 {ok}, 失败 {fail}, 输出目录: {RAW_DIR}")
+    if args.images:
+        print(f"图片下载: {img_total} 张 → {os.path.join(RAW_DIR, 'img')}")
+    print(f"发表时间已记录 {len(pub_times)} 条 → {pub_path}")
 
 
 if __name__ == "__main__":
