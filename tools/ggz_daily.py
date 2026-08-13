@@ -10,6 +10,7 @@
     python tools/ggz_daily.py wish          # [3] 许愿池（贝壳≥30w 且今日未许愿）
     python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新）
     python tools/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
+    python tools/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
     python tools/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
     python tools/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
     python tools/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水）
@@ -300,12 +301,15 @@ def parse_equips(html, want_id=False):
     """解析装备按钮列表（f=1 沙滩 / f=6 身上通用）。
 
     每个装备按钮结构（2026-08-12 实测 f=6）：
-      <button ... data-content="<p>词条<span class='pull-right bg-*'>&nbsp;150%&nbsp;</span></p>..."
+      <button ... data-content="<p class='fyg_xlxxXXX'>词条名 +N<span class='pull-right bg-*'>&nbsp;150%&nbsp;</span></p>..."
               title="Lv.<span>100</span> 装备名" ...><img src="ys/icon/z2101_4.gif">...
     沙滩版额外含 zbtip('ID','4')。
-    返回 [{icon, quality, name, level, total, mystery, bid}]
+    返回 [{icon, quality, name, level, total, mystery, bid, n_affix, has_orange, has_red, has_high}]
       icon: 部位码 zXXXX；quality: 品质数字；total: 词条总值(% 之和)；bid: 沙滩拾取 id
+      has_orange/has_red: 橙/红词条；has_high: 含高价值词条
     """
+    HIGH_AFFIX = ["生命偷取", "附加物伤", "附加魔伤", "附加物穿", "附加魔穿",
+                  "技能概率", "暴击概率", "攻击速度"]
     result = []
     for btn in re.findall(r"<button[^>]*>.*?</button>", html, re.S):
         if "ys/icon/z" not in btn:
@@ -317,32 +321,68 @@ def parse_equips(html, want_id=False):
         m = re.search(r'title="Lv\.<span[^>]*>(\d+)</span>[\s\S]*?(?:<br|</span>)([^"<]*?)(?:"|$)', btn)
         level, name = (m.group(1), m.group(2).strip()) if m else ("?", "?")
         total = 0.0
-        for m in re.finditer(r"pull-right bg-\w+[^>]*>(?:&nbsp;|\s)*(\d+(?:\.\d+)?)%", btn):
-            total += float(m.group(1))
+        # 词条颜色统计（2026-08-13 实测 class：danger=红 warning=橙 info=蓝 primary=紫 success=绿）
+        has_orange = False
+        has_red = False
+        has_high = False
+        n_affix = 0
+        # 每词条: <p class='fyg_xlxxXXX'>名称 +N<span class='pull-right bg-XXX'>&nbsp;N%&nbsp;</span></p>
+        for m in re.finditer(r"<p class='fyg_xlxx\w+'>(.*?)</p>", btn, re.S):
+            affix_html = m.group(1)
+            # 词条名称: <p> 后到 <span 前的文本（如 "附加物伤 +1290"）
+            name_m = re.match(r"\s*([^<\s]+)", affix_html)
+            affix_name = name_m.group(1) if name_m else ""
+            # 百分比
+            val_m = re.search(r"pull-right (bg-\w+)[^>]*>(?:&nbsp;|\s)*(\d+(?:\.\d+)?)%", affix_html)
+            if not val_m:
+                continue
+            color, val = val_m.group(1), float(val_m.group(2))
+            total += val
+            n_affix += 1
+            if color == "bg-warning":
+                has_orange = True
+            elif color == "bg-danger":
+                has_red = True
+            if any(kw in affix_name for kw in HIGH_AFFIX):
+                has_high = True
         mystery = "[神秘属性]" in btn or "神秘属性" in btn
         m = re.search(r"zbtip\('(\d+)','4'\)", btn)
         bid = m.group(1) if m else None
         result.append({"icon": icon, "quality": quality, "name": name,
-                       "level": level, "total": total, "mystery": mystery, "bid": bid})
+                       "level": level, "total": total, "mystery": mystery, "bid": bid,
+                       "n_affix": n_affix, "has_orange": has_orange, "has_red": has_red,
+                       "has_high": has_high})
     return result
 
 
 def equip_decision(it, worn):
-    """沙滩装备决策（05 §4.5 规则简化版）。返回 'take' / 'clear'。
+    """沙滩装备决策（05 §4.5 规则，2026-08-13 更新）。返回 'take' / 'clear'。
 
-    ① 橙装（总值≥516%）→ 收（备其他角色）
-    ② 含神秘 → 必收
-    ③ 品质≥3 → 收（可熔炼为护身符）
-    ④ 同部位对比（icon 前 3 位）：沙滩总值 > 身上同部位 → 收；无同部位 → 收
-    ⑤ 其余 → 清
+    收取条件（并集，满足任一即收）：
+      ① 橙装（总值≥516%）→ 无脑收（备其他角色）
+      ② 含神秘 → 必收
+      ③ 能熔炼（品质≥3 且总值≥410% 且无神秘 且非橙装）→ 收（供手动熔炼，长期规则）
+      ④ 红/橙词条(bg-danger/bg-warning)：
+         含高价值词条 → 四词条总数≥450% 无脑收
+         无高价值词条 → 四词条总数≥500% 无脑收
+      ⑤ 同部位对比：沙滩总值 > 身上同部位 → 收；无同部位（空部位）→ 收
+      ⑥ 其余 → 清
     """
+    # ① 橙装
     if it["total"] >= 516:
         return "take"
+    # ② 神秘
     if it["mystery"]:
         return "take"
-    if it["quality"] >= 3:
+    # ③ 能熔炼：品质≥3 且 总值≥410%（熔炼线 2026-08-10 实测），留供手动熔炼
+    if it["quality"] >= 3 and it["total"] >= 410:
         return "take"
-    # 同部位：icon 前 3 位（z21x武器/z22x手环/z23x衣服/z24x饰品）
+    # ④ 红/橙词条：有高价值→450，无高价值→500（2026-08-13 用户指定）
+    if it["has_orange"] or it["has_red"]:
+        threshold = 450 if it["has_high"] else 500
+        if it["total"] >= threshold:
+            return "take"
+    # ⑤ 同部位对比：icon 前 3 位（z21x武器/z22x手环/z23x衣服/z24x饰品）
     slot = it["icon"][:3] if len(it["icon"]) >= 3 else ""
     same = [w for w in worn if w["icon"][:3] == slot]
     if not same:
@@ -375,8 +415,15 @@ def beach():
     worn = parse_equips(read_block(6))
     print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
     for it in items:
-        print(f"  {it['name']} {it['quality']}等 {it['total']:.0f}% icon={it['icon']} id={it['bid']}"
-              f"{' 神秘' if it['mystery'] else ''}")
+        mark = []
+        if it["has_orange"]:
+            mark.append("橙")
+        if it["has_red"]:
+            mark.append("红")
+        if it["mystery"]:
+            mark.append("神秘")
+        mark_str = f" 词条[{'/'.join(mark)}]" if mark else ""
+        print(f"  {it['name']} {it['quality']}等 {it['total']:.0f}% icon={it['icon']} id={it['bid']}{mark_str}")
 
     take_ids, clear_count = [], 0
     for it in items:
@@ -394,6 +441,40 @@ def beach():
     if clear_count > 0:
         r = click(20)
         show("c=20 清理沙滩", r)
+
+
+def smelt():
+    """[4.5c] 熔炼仓库可熔炼装备为护身符（4.5b 决策树）。
+
+    触发条件（2026-08-10 实测）：品质≥3 且 总值≥410% 且 无神秘 且 非橙装（<516%）。
+    熔炼 = c=9&id=<仓库装备id>&yz=124，返回新护身符 id；装备消失。
+    ⚠️ 神秘装/橙装永不熔炼（巨亏教训）。
+    """
+    t = read_block(2)
+    items = parse_equips(t, want_id=True)
+    if not items:
+        print("仓库空，无可熔炼")
+        return
+    # f=2 仓库装备 id 在 zbtip('id','3')，需补充解析
+    smeltable = []
+    for it in items:
+        if it["quality"] >= 3 and it["total"] >= 410 and not it["mystery"] and it["total"] < 516:
+            smeltable.append(it)
+    if not smeltable:
+        print("仓库无可熔炼装备（需品质≥3 且总值≥410% 且无神秘 且非橙装）")
+        return
+    print(f"可熔炼 {len(smeltable)} 件:")
+    for it in smeltable:
+        print(f"  {it['name']} {it['quality']}等 {it['total']:.0f}% id={it['bid']}")
+    for it in smeltable:
+        if it["bid"] is None:
+            continue
+        r = click(9, id=it["bid"], yz=124)
+        msg = strip_tags(r)
+        print(f"c=9 熔炼 {it['name']}: {msg[:80]}")
+        if "至少需要稀有" in msg or "不可熔炼" in msg:
+            print("  ⚠️ 熔炼资格判断有误，停止")
+            break
 
 
 def beach_refresh():
@@ -585,6 +666,8 @@ def main():
         beach()
     elif cmd == "refresh":
         beach_refresh()
+    elif cmd == "smelt":
+        smelt()
     elif cmd == "pk":
         full = "--full" in sys.argv
         args = [a for a in sys.argv[2:] if not a.startswith("--")]
