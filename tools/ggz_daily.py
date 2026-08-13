@@ -5,9 +5,10 @@
     python tools/ggz_daily.py stat          # 汇总状态（战场/工坊/翻牌）
     python tools/ggz_daily.py addpoint      # [0.5] 加点（自动分配剩余点）
     python tools/ggz_daily.py gem           # [1] 工坊收菜+开工（加工中→收工→自动重开）
-    python tools/ggz_daily.py gemup         # [1.5] 提升宝石（检查原石存量）
+    python tools/ggz_daily.py gemup         # [1.5] 提升宝石（读道具栏原石持有量→按上限比例低优先）
+    python tools/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
     python tools/ggz_daily.py wish          # [3] 许愿池（贝壳≥30w 且今日未许愿）
-    python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则）
+    python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新）
     python tools/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
     python tools/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
     python tools/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
@@ -39,18 +40,25 @@ USER = None   # 动态: 主页提取
 ZID = None    # 动态: f=8 出战中角色
 
 
-def request(url, data=None, retries=3):
-    """HTTP 请求，带重试（momozhen SSL 偶发断开）。"""
+def request(url, data=None, retries=3, xhr=True):
+    """HTTP 请求，带重试（momozhen SSL 偶发断开）。
+
+    xhr=True 时带 X-Requested-With: XMLHttpRequest 头——服务器对带此头的请求
+    返回 JS 动态加载的内容（如装备页道具栏），静态请求拿不到（2026-08-13 实测）。
+    """
     body = urllib.parse.urlencode(data).encode() if data else None
     last_err = None
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, data=body, headers={
+            headers = {
                 "Cookie": COOKIE,
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
                 "Referer": BASE + "/fyg_index.php",
-                "Content-Type": "application/x-www-form-urlencoded",
-            })
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            }
+            if xhr:
+                headers["X-Requested-With"] = "XMLHttpRequest"
+            req = urllib.request.Request(url, data=body, headers=headers)
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return resp.read()
         except Exception as e:
@@ -195,25 +203,97 @@ def wish():
         print("贝壳 < 30w，跳过许愿")
 
 
-def gemup():
-    """[1.5] 提升宝石：检查工坊第4栏「宝石原石」存量，有才 c=27 提升。
+def get_items():
+    """读取道具栏持有量（f=7 武器装备区，2026-08-13 实测）。
 
-    工坊 6 栏（2026-08-12 实测结构）：
-      1 贝壳(红石)  2 随机装备箱(银石)  3 灵魂药水(金石)
-      4 宝石原石(梦石)  5 星沙(虚石)  6 幻影经验(幻石)
-    c=27 消耗的是第4栏产出的「宝石原石」，不是宝石拥有量。
-    原石为收工时结算，日常执行时通常无存量 → 默认跳过（保留接口供收工后调用）。
+    f=7 返回 HTML 顶部"我的仓库"含道具按钮：
+      <button ... style="background-image:url(ys/icon/i/it005.gif);" ...>6</button>
+    数量在按钮文本（如 "6"）或 title（如 title="宝石原石 x6"）。
+    icon 文件名: it001药水/it002锻造箱/it003灵魂药水/it004随机装备箱/it005宝石原石/
+                 it301蓝锻造石/it302绿锻造石/it310光环天赋石/it309苹果核
+    返回 {道具id: 数量}，如 {'it005': 6, 'it004': 5, 'it310': 1}
     """
-    t = read_block(21)
-    # 第4栏: <div ...>N%概率出产<br>宝石原石<br>...<br>梦石N<br>每分钟 +X%概率</div>
-    m = re.search(r"(\d+\.?\d*)%概率出产<br>宝石原石", t)
-    prob = m.group(1) if m else "0"
-    # 已产出判断：看「已拾取」格式是否有对应（宝石原石栏无已拾取，说明以概率形式存在）
-    # 提升宝石动作本身消耗原石，若概率 >0 说明该栏在工作，但原石是否已产出需看工坊结算
-    print(f"宝石原石产出概率: {prob}%")
-    # 原石是工坊产物，收工才结算。当前无原石则跳过（有原石会出现在工坊结算/仓库）
-    print("原石为工坊产出（收工时结算），当前无存量则不提升")
-    print("跳过提升宝石（无原石存量）")
+    html = read_block(7)
+    result = {}
+    for btn in re.findall(r"<button[^>]*>.*?</button>", html, re.S):
+        m = re.search(r"ys/icon/i/(it\d+)\.gif", btn)
+        if not m:
+            continue
+        item_id = m.group(1)
+        # 数量：优先按钮文本（如 "6"），否则 title（如 title="宝石原石 x6"）
+        n = re.search(r">\s*(\d+)\s*</button>", btn, re.S)
+        if not n:
+            n = re.search(r'title="[^"]*x(\d+)"', btn)
+        result[item_id] = int(n.group(1)) if n else 0
+    return result
+
+
+def gemup():
+    """[1.5] 提升宝石：读装备页道具栏宝石原石(it005)持有量 → c=27 提升。
+
+    实测（2026-08-13）：宝石原石是道具（it005，装备页仓库顶部），每次消耗 1 颗。
+    提升菜单 omenu(6) 显示各石拥有量：红石2/银石0/金石0/梦石0/虚石0/幻石0。
+    策略（用户指定）：数量越大成功率越低 → 优先提升上限比例低的
+    （比例=拥有量/上限），比例相同时按 1红2银3金4梦5虚6幻。
+    """
+    items = get_items()
+    stones = items.get("it005", 0)
+    print(f"宝石原石持有: {stones}")
+    if stones <= 0:
+        print("无宝石原石，跳过提升宝石")
+        return
+
+    # 各石上限（实测菜单：红50/银50/金30/梦30/虚10/幻10）
+    caps = {"1": (50, "红石"), "2": (50, "银石"), "3": (30, "金石"),
+            "4": (30, "梦石"), "5": (10, "虚石"), "6": (10, "幻石")}
+    # 读提升菜单拿当前拥有量（fyg_menu.php?m=6）
+    menu = dec(request(BASE + "/fyg_menu.php", {"m": 6}))
+    own = {}
+    for sid, (cap, name) in caps.items():
+        m = re.search(re.escape(name) + r"\s*已拥有(\d+)", menu)
+        own[sid] = int(m.group(1)) if m else 0
+    print(f"当前宝石拥有量: " + ", ".join(f"{name}{own[sid]}/{cap}" for sid, (cap, name) in caps.items()))
+
+    # 按上限比例升序（比例低优先），比例相同按 id 顺序
+    order = sorted(caps.keys(), key=lambda sid: (own[sid] / caps[sid][0], int(sid)))
+    print(f"提升顺序: " + " → ".join(f"{caps[s][1]}({own[s]}/{caps[s][0]})" for s in order))
+
+    for sid in order:
+        if stones <= 0:
+            break
+        r = click(27, id=sid)
+        msg = strip_tags(r)
+        print(f"c=27 提升{caps[sid][1]}: {msg[:80]}")
+        stones -= 1
+        if "宝石原石不足" in msg or "不够" in msg:
+            break
+    print("提升宝石完成")
+
+
+def halo():
+    """[1.5b] 提升光环：读装备页光环天赋石(3310)持有量 → c=29 提升。
+
+    实测（2026-08-13）：光环天赋页「提升天赋光环」= oclick('29','29','5') → c=29&id=29，
+    每次消耗 1 枚光环天赋石，光环值 +（274 前每颗+0.05，280 后衰减）。
+    """
+    items = get_items()
+    stones = items.get("it310", 0)
+    print(f"光环天赋石持有: {stones}")
+    if stones <= 0:
+        print("无光环天赋石，跳过提升光环")
+        return
+    # 读光环页当前光环值
+    halo_html = dec(request(BASE + "/fyg_equip.php?eid=5"))
+    m = re.search(r"([\d.]+)%\s*天赋光环", halo_html)
+    halo_v = m.group(1) if m else "?"
+    print(f"当前光环: {halo_v}%")
+    for i in range(stones):
+        r = click(29, id=29)
+        msg = strip_tags(r)
+        print(f"c=29 提升光环 #{i + 1}: {msg[:80]}")
+        if "天赋石" in msg and ("不足" in msg or "不够" in msg):
+            break
+    print("提升光环完成")
 
 
 def parse_equips(html, want_id=False):
@@ -227,12 +307,14 @@ def parse_equips(html, want_id=False):
       icon: 部位码 zXXXX；quality: 品质数字；total: 词条总值(% 之和)；bid: 沙滩拾取 id
     """
     result = []
-    for btn in re.findall(r"<button[^>]*>(.*?)</button>", html, re.S):
+    for btn in re.findall(r"<button[^>]*>.*?</button>", html, re.S):
         if "ys/icon/z" not in btn:
             continue
+        # icon: background-image:url(ys/icon/z/z2402_2.gif)（品质后缀 _2）
         m = re.search(r"ys/icon/z(\d{4})(?:_(\d))?\.gif", btn)
         icon, quality = (m.group(1), int(m.group(2)) if m and m.group(2) else 0) if m else ("", 0)
-        m = re.search(r"title=\"Lv\.<span[^>]*>(\d+)</span>\s*([^\"]*)\"", btn)
+        # title: Lv.<span>100</span> <span>星级</span><br>装备名
+        m = re.search(r'title="Lv\.<span[^>]*>(\d+)</span>[\s\S]*?(?:<br|</span>)([^"<]*?)(?:"|$)', btn)
         level, name = (m.group(1), m.group(2).strip()) if m else ("?", "?")
         total = 0.0
         for m in re.finditer(r"pull-right bg-\w+[^>]*>(?:&nbsp;|\s)*(\d+(?:\.\d+)?)%", btn):
@@ -273,13 +355,23 @@ def beach():
     """[4] 沙滩收取 + 清理（4.5 规则）。
 
     流程：读 f=1 沙滩 + f=6 身上 → 逐件决策 → 先 c=1 拾取要收的 → 再 c=20 清理剩余。
+    沙滩空但有随机装备箱 → 自动强制刷新（c=12）再筛。
     ⚠️ 沙滩 id 拾取后重排：逐件拾取后重新读 f=1 抓新 id。
     """
     t1 = read_block(1)
     items = parse_equips(t1, want_id=True)
     if not items:
-        print("沙滩空，无装备")
-        return
+        # 沙滩空 → 有装备箱则强制刷新
+        boxes = get_items().get("it004", 0)
+        print(f"沙滩空，无装备（随机装备箱持有 {boxes}）")
+        if boxes > 0:
+            print("→ 有装备箱，强制刷新沙滩...")
+            r = click(12)
+            show("c=12 刷新沙滩返回", r)
+            t1 = read_block(1)
+            items = parse_equips(t1, want_id=True)
+        else:
+            return
     worn = parse_equips(read_block(6))
     print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
     for it in items:
@@ -306,6 +398,11 @@ def beach():
 
 def beach_refresh():
     """[4.5] 强制刷新沙滩（耗 1 随机装备箱，c=12）→ 刷新后按 4.5 规则再筛一轮"""
+    boxes = get_items().get("it004", 0)
+    print(f"随机装备箱持有: {boxes}")
+    if boxes <= 0:
+        print("无随机装备箱，跳过强制刷新")
+        return
     r = click(12)
     show("c=12 刷新沙滩返回", r)
     beach()
@@ -438,11 +535,11 @@ def gift():
 
 def all_daily():
     """一键日常（按 05 §4A 顺序，逐步容错）：
-    addpoint → gem(收菜+开工) → gemup → wish → beach → pk → gift → bonus
+    addpoint → gem(收菜+开工) → gemup → halo → wish → beach → pk → gift → bonus
     """
     steps = [("加点", addpoint), ("工坊收菜", gem), ("宝石提升", gemup),
-             ("许愿池", wish), ("沙滩收取", beach), ("出击打野", pk),
-             ("翻牌", gift), ("额外奖励", bonus)]
+             ("光环提升", halo), ("许愿池", wish), ("沙滩收取", beach),
+             ("出击打野", pk), ("翻牌", gift), ("额外奖励", bonus)]
     for name, fn in steps:
         print(f"\n{'=' * 20} [{name}] {'=' * 20}")
         try:
@@ -480,6 +577,8 @@ def main():
         gem()
     elif cmd == "gemup":
         gemup()
+    elif cmd == "halo":
+        halo()
     elif cmd == "wish":
         wish()
     elif cmd == "beach":
