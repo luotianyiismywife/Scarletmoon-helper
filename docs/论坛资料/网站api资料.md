@@ -135,7 +135,59 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 | `kf_fw_1wkfb.php?ping=3` | 评分 |
 | `guanjianci.php?gjc=用户名` | 被@记录 |
 | `diy_read_tui.php` | 推帖（POST，需 safeid） |
-| `post.php` | 发帖/回复 |
+| `post.php` | 发帖/回复（详见 3.6） |
+
+### 3.6 发帖 / 回帖：`/post.php`（2026-08-14 浏览器+脚本实测 ⭐）
+
+**已实现脚本**：`tools/forum_post.py`（new 发帖 / reply 回帖 / check 查回复）。
+
+#### 会话前提（关键坑）
+- **必须用 `requests.Session`**（域内 cookie + 自动跟随 Set-Cookie 的 PHPSESSID）。用 urllib 手拼 `Cookie` 头会导致会话建立不了，**所有页面被 302 到 `login.php`**（实测）。
+- **`sf` 令牌是绑定会话的**：浏览器会话里拿到的 `read.php?tid=X&sf=YYY` 的 sf，拿到脚本自己的会话里用会被重定向回首页。脚本要在**自己的会话内**重新获得 sf（如经搜索接口，见 3.3）。
+- 登录态判定同 §2：页面含 `login.php?action=quit`。
+
+#### 发新帖
+1. `GET post.php?action=new&fid=<版块>` → 返回表单，提取 hidden `verify`（会话级防伪令牌，形如 `8649c7cb`）。
+2. `POST post.php?`，body（**GBK 编码**）关键字段：
+   ```
+   action=new & step=2 & fid=<版块> & tid=0 & verify=<令牌>
+   & atc_title=<标题> & atc_content=<正文> & diy_guanjianci=<关键词>
+   & atc_iconid=93 & atc_usesign=1 & atc_convert=1 & atc_autourl=1
+   & special=0 & article= & pid= & magicname= & magicid= & atc_downrvrc1=0 & atc_desc1=
+   & Submit=确定发表
+   ```
+3. 成功 → 302/落地 `read.php?tid=<新tid>&sf=<新sf>`。
+
+#### 回帖
+1. `GET read.php?tid=<tid>&sf=<sf>` → 页面内回复表单含 hidden `verify`、`fid`（**fid 建议从页面动态提取**，勿写死）。
+2. `POST post.php?`，body（GBK）：
+   ```
+   action=reply & step=2 & fid=<版块> & tid=<tid> & verify=<令牌>
+   & atc_content=<正文> & atc_title=none & atc_usesign=1 & atc_convert=1 & atc_autourl=1
+   & diy_guanjianci= & Submit=回复帖子
+   ```
+3. 成功 → 返回 **meta-refresh 跳转页**（`requests` 不跟随 meta-refresh，需靠它判定成功）：
+   ```html
+   <meta http-equiv="refresh" content="1;url=read.php?tid=<tid>&sf=<sf>&page=e&#a">
+   ```
+   `page=e&#a` = 跳到最后一页并定位到新回复。
+
+#### 字段说明
+| 字段 | 说明 |
+|------|------|
+| `atc_title` | 标题（新帖必填；回帖填 `none`） |
+| `atc_content` | 正文（纯文本/BBCode，见表情） |
+| `diy_guanjianci` | 关键词：≤5 个、英文逗号隔、每个 ≤16 字节、不含引号；**填别人 ID 会 @ 对方**；渲染成 `guanjianci.php?gjc=<词>` 链接 |
+| `atc_iconid` | 主题图标 id（自由讨论区默认 `93`，hidden 固定值） |
+| `verify` | 防伪令牌，从表单页动态提取 |
+| `atc_usesign` | 1=带签名档 |
+
+#### 编码坑（务必）
+- 论坛 GBK，POST body 必须**逐字段 `.encode('gbk')` 后 percent-encode**（同 3.3 搜索的坑）。UTF-8 提交中文会乱码/被拒。
+
+#### 表情（详见 `论坛表情对照表.md`）
+- 正文写 `[s:编号]`（编号 10–57），发表后渲染成 `em/emNN.gif`（NN=编号-9）。
+- 例：`[s:57]`=哈哈大笑、`[s:20]`=委屈、`[s:39]`=憨笑。
 
 ---
 

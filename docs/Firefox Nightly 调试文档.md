@@ -1,7 +1,18 @@
 # Firefox Nightly 浏览器调试文档
 
 > 用途：记录用 Firefox Nightly + firefox-devtools-mcp 调试咕咕镇/论坛接口的完整流程与注意事项。
-> 最后更新：2026-08-10
+> 最后更新：2026-08-14
+
+---
+
+## 0. 核心规则（必读）
+
+1. **调试脚本默认用 Firefox Nightly，不要用标准版 Firefox。**
+   - 标准版（`C:\Program Files\Mozilla Firefox\`）是用户日常浏览器，勿动、勿杀、勿占端口。
+   - 所有调试/自动化验证一律启动 Nightly（`C:\Program Files\Firefox Nightly\firefox.exe`）。
+2. **MCP 配置文件位置**：工作区级 `.vscode/mcp.json`，即
+   `c:\Users\HJM\Documents\Scarletmoon-helper\.vscode\mcp.json`（入库同步，.gitignore 中 `.vscode/*` 的例外项）。
+3. MCP 是 `--connect-existing` 模式：**必须先手动启动 Nightly（带 --marionette），MCP 工具才可用**，否则报 `unknown error`（见 §4.2）。
 
 ---
 

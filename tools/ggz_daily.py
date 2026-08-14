@@ -5,7 +5,7 @@
     python tools/ggz_daily.py stat          # 汇总状态（战场/工坊/翻牌）
     python tools/ggz_daily.py addpoint      # [0.5] 加点（自动分配剩余点）
     python tools/ggz_daily.py gem           # [1] 工坊收菜+开工（加工中→收工→自动重开）
-    python tools/ggz_daily.py gemup         # [1.5] 提升宝石（读道具栏原石持有量→按上限比例低优先）
+    python tools/ggz_daily.py gemup         # [1.5] 提升宝石（B以下只升梦>红>银；比例低优先）
     python tools/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
     python tools/ggz_daily.py wish          # [3] 许愿池（贝壳≥30w 且今日未许愿）
     python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新）
@@ -234,8 +234,11 @@ def gemup():
 
     实测（2026-08-13）：宝石原石是道具（it005，装备页仓库顶部），每次消耗 1 颗。
     提升菜单 omenu(6) 显示各石拥有量：红石2/银石0/金石0/梦石0/虚石0/幻石0。
-    策略（用户指定）：数量越大成功率越低 → 优先提升上限比例低的
-    （比例=拥有量/上限），比例相同时按 1红2银3金4梦5虚6幻。
+    策略（2026-08-14 用户确认）：
+      - B 段以下（C/CC/CCC）：只升 梦石 > 红石 > 银石，跳过金/虚/幻（到 B 段再考虑）
+      - **梦石优先 = 复利**：梦石↑→工坊宝石原石产出↑→更多提升机会（短期难受长期收益）
+      - B 段及以上：6 石种全开（金石因近期可能重新启用，排最后观察）
+      - 排序：按 拥有量/上限 比例升序（比例低优先），比例相同按上述优先级顺序
     """
     items = get_items()
     stones = items.get("it005", 0)
@@ -255,8 +258,19 @@ def gemup():
         own[sid] = int(m.group(1)) if m else 0
     print(f"当前宝石拥有量: " + ", ".join(f"{name}{own[sid]}/{cap}" for sid, (cap, name) in caps.items()))
 
-    # 按上限比例升序（比例低优先），比例相同按 id 顺序
-    order = sorted(caps.keys(), key=lambda sid: (own[sid] / caps[sid][0], int(sid)))
+    # 段位判定：B 段以下（C/CC/CCC）只升梦/红/银（2026-08-14 用户确认：梦石优先 =
+    # 复利，梦石↑→原石产出↑→更多提升机会，短期难受长期收益；红石=贝壳+仓库格次之；
+    # 虚/幻/金到 B 段再考虑）
+    rank = parse_pk()["段位"].strip()
+    if rank.startswith("C"):
+        prio = ["4", "1", "2"]  # 梦 > 红 > 银
+        print(f"段位 {rank}（B 以下）：只升梦/红/银，跳过金/虚/幻")
+    else:
+        prio = ["4", "1", "2", "5", "6", "3"]  # B 段及以上全开，金石（待重新启用观察）排最后
+        print(f"段位 {rank}（B 段及以上）：6 石种全开")
+
+    # 按上限比例升序（比例低优先），比例相同按优先级顺序
+    order = sorted(prio, key=lambda sid: (own[sid] / caps[sid][0], prio.index(sid)))
     print(f"提升顺序: " + " → ".join(f"{caps[s][1]}({own[s]}/{caps[s][0]})" for s in order))
 
     for sid in order:
@@ -315,7 +329,8 @@ def parse_equips(html, want_id=False):
         if "ys/icon/z" not in btn:
             continue
         # icon: background-image:url(ys/icon/z/z2402_2.gif)（品质后缀 _2）
-        m = re.search(r"ys/icon/z(\d{4})(?:_(\d))?\.gif", btn)
+        # ⚠️ 真实路径 icon/ 后带一层 z/ 子目录（2026-08-14 实测）；(?:/z)? 兼容新旧两种写法
+        m = re.search(r"ys/icon/z(?:/z)?(\d{4})(?:_(\d))?\.gif", btn)
         icon, quality = (m.group(1), int(m.group(2)) if m and m.group(2) else 0) if m else ("", 0)
         # title: Lv.<span>100</span> <span>星级</span><br>装备名
         m = re.search(r'title="Lv\.<span[^>]*>(\d+)</span>[\s\S]*?(?:<br|</span>)([^"<]*?)(?:"|$)', btn)
@@ -408,8 +423,17 @@ def beach():
             print("→ 有装备箱，强制刷新沙滩...")
             r = click(12)
             show("c=12 刷新沙滩返回", r)
-            t1 = read_block(1)
-            items = parse_equips(t1, want_id=True)
+            # ⚠️ c=12 刷新后服务器异步落库，立即读 f=1 往往还是空的（2026-08-14 踩坑：
+            # 因此拾取/清理全被跳过）。等待 + 重试直到装备出现。
+            for attempt in range(6):
+                time.sleep(2)
+                t1 = read_block(1)
+                items = parse_equips(t1, want_id=True)
+                if items:
+                    print(f"  刷新后第 {attempt + 1} 次读取到 {len(items)} 件装备")
+                    break
+            else:
+                print("  ⚠️ 刷新后重试 6 次仍未读到装备（可能服务器延迟/限流）")
         else:
             return
     worn = parse_equips(read_block(6))

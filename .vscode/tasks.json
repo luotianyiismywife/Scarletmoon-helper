@@ -1,0 +1,226 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "ggz: all（一键日常）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"all"
+			],
+			"group": "test",
+			"detail": "咕咕镇一键日常（加点→工坊→宝石→光环→许愿→沙滩→出击→翻牌→额外奖励）"
+		},
+		{
+			"label": "ggz: stat（状态汇总）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"stat"
+			],
+			"group": "test",
+			"detail": "战场/工坊/翻牌 状态汇总"
+		},
+		{
+			"label": "ggz: addpoint（加点）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"addpoint"
+			],
+			"group": "test",
+			"detail": "自动分配剩余属性点"
+		},
+		{
+			"label": "ggz: gem（工坊收菜+开工）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"gem"
+			],
+			"group": "test",
+			"detail": "加工中→收工→自动重新开工"
+		},
+		{
+			"label": "ggz: gemup（宝石提升）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"gemup"
+			],
+			"group": "test",
+			"detail": "B以下只升梦>红>银；比例低优先"
+		},
+		{
+			"label": "ggz: halo（光环提升）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"halo"
+			],
+			"group": "test",
+			"detail": "耗光环天赋石 c=29 提升光环"
+		},
+		{
+			"label": "ggz: wish（许愿池）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"wish"
+			],
+			"group": "test",
+			"detail": "贝壳≥30w 且今日未许愿则许愿1次"
+		},
+		{
+			"label": "ggz: beach（沙滩收取+清理）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"beach"
+			],
+			"group": "test",
+			"detail": "4.5 规则；空且有装备箱→自动刷新"
+		},
+		{
+			"label": "ggz: refresh（强制刷新沙滩）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"refresh"
+			],
+			"group": "test",
+			"detail": "耗 1 随机装备箱 c=12 刷新"
+		},
+		{
+			"label": "ggz: smelt（熔炼护身符）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"smelt"
+			],
+			"group": "test",
+			"detail": "熔炼仓库可熔炼装备为护身符（手动）"
+		},
+		{
+			"label": "ggz: pk（出击打野）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"pk"
+			],
+			"group": "test",
+			"detail": "默认 3 狗牌停；--full 可打满 n 次"
+		},
+		{
+			"label": "ggz: gift（翻牌）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"gift"
+			],
+			"group": "test",
+			"detail": "无透视策略，3 同色结算"
+		},
+		{
+			"label": "ggz: bonus（额外奖励）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz_daily.py",
+				"bonus"
+			],
+			"group": "test",
+			"detail": "耗 1 体能刺激药水再领一次翻牌奖励"
+		},
+		{
+			"label": "forum-check-replies",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/forum_post.py",
+				"check",
+				"--tid",
+				"1083618",
+				"--sf",
+				"267"
+			],
+			"group": "test",
+			"detail": "每日检查咕咕镇疑问帖是否有新回复"
+		},
+		{
+			"label": "build-userscript",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"build.js"
+			],
+			"group": "build",
+			"detail": "构建油猴签到脚本 dist/allinone.user.js"
+		},
+		{
+			"label": "git-status",
+			"type": "shell",
+			"command": "git status --short; Write-Output '=== untracked ==='; git ls-files --others --exclude-standard"
+		},
+		{
+			"label": "git-add-all",
+			"type": "shell",
+			"command": "git add -A; git status --short; Write-Output '=== staged done ==='"
+		},
+		{
+			"label": "git-check-vscode",
+			"type": "shell",
+			"command": "git status --short .vscode/; Write-Output '=== check .vscode ==='"
+		},
+		{
+			"label": "git-check-gitignore",
+			"type": "shell",
+			"command": "Get-Content .gitignore; Write-Output '=== check-ignore ==='; git check-ignore -v .vscode/tasks.json; Write-Output '=== tasks exists ==='; Test-Path .vscode/tasks.json"
+		},
+		{
+			"label": "git-add-tasks",
+			"type": "shell",
+			"command": "git add .gitignore .vscode/tasks.json; git status --short .vscode/ .gitignore; Write-Output '=== done ==='"
+		},
+		{
+			"label": "git-commit",
+			"type": "shell",
+			"command": "git commit -m \"论坛发帖/回帖工具+旧争夺API+角色属性表+日常优化\" -m \"- tools/forum_post.py: 发帖/回帖/查回复（requests.Session+GBK编码，实测可用）\\n- docs/论坛资料/: 网站api资料(§3.6发帖)/表情对照表/帖子跟踪\\n- docs/旧争夺资料/04: 旧争夺api资料\\n- docs/咕咕镇-新争夺资料/07: 角色属性表(12卡/打野排行/切卡)\\n- ggz_daily.py: gemup改红>梦>银(复利)、沙滩刷新重试、icon正则修复\\n- tasks.json/mcp.json 入库同步；.gitignore 放行 tasks.json\\n- 修正文档链接(网站api资料.md 移到 论坛资料/)\"; Write-Output '=== commit done ==='; git log --oneline -3"
+		},
+		{
+			"label": "git-commit-f",
+			"type": "shell",
+			"command": "Set-Content -Path commit_msg.txt -Value @\"\n论坛发帖/回帖工具+旧争夺API+角色属性表+日常优化\n\n- tools/forum_post.py: 发帖/回帖/查回复（requests.Session+GBK编码，实测可用）\n- docs/论坛资料/: 网站api资料(含发帖接口)/表情对照表/帖子跟踪\n- docs/旧争夺资料/04: 旧争夺api资料\n- docs/咕咕镇-新争夺资料/07: 角色属性表(12卡/打野排行/切卡)\n- ggz_daily.py: gemup复利优先梦石、沙滩刷新重试、icon正则修复\n- tasks.json/mcp.json 入库同步；.gitignore 放行 tasks.json\n- 修正文档链接(网站api资料.md 移到 论坛资料/)\n\"@ -Encoding UTF8; git commit -F commit_msg.txt; Remove-Item commit_msg.txt; Write-Output '=== commit done ==='; git log --oneline -3"
+		},
+		{
+			"label": "write-commit-msg",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"-c",
+				"open('commit_msg.txt','w',encoding='utf-8').write('论坛发帖/回帖工具+旧争夺API+角色属性表+日常优化\\n\\n- tools/forum_post.py: 发帖/回帖/查回复（requests.Session+GBK编码，实测可用）\\n- docs/论坛资料/: 网站api资料(含发帖接口)/表情对照表/帖子跟踪\\n- docs/旧争夺资料/04: 旧争夺api资料\\n- docs/咕咕镇-新争夺资料/07: 角色属性表(12卡/打野排行/切卡)\\n- ggz_daily.py: gemup复利优先梦石、沙滩刷新重试、icon正则修复\\n- tasks.json/mcp.json 入库同步；.gitignore 放行 tasks.json\\n- 修正文档链接(网站api资料.md 移到 论坛资料/)\\n')"
+			]
+		},
+		{
+			"label": "git-commit-noedit",
+			"type": "shell",
+			"command": "git",
+			"args": [
+				"commit",
+				"--no-edit"
+			]
+		}
+	]
+}

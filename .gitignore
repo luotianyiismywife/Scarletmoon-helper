@@ -4,9 +4,10 @@ node_modules/
 # Tampermonkey source maps
 *.map
 
-# VS Code 本地配置（mcp.json 入库同步，其余不同步）
+# VS Code 本地配置（mcp.json / tasks.json 入库同步，其余不同步）
 .vscode/*
 !.vscode/mcp.json
+!.vscode/tasks.json
 
 # 论坛 Cookie（登录凭证，不入库）
 cookie.txt
