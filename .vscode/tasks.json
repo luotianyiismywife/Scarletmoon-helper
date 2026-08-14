@@ -168,59 +168,6 @@
 			],
 			"group": "build",
 			"detail": "构建油猴签到脚本 dist/allinone.user.js"
-		},
-		{
-			"label": "git-status",
-			"type": "shell",
-			"command": "git status --short; Write-Output '=== untracked ==='; git ls-files --others --exclude-standard"
-		},
-		{
-			"label": "git-add-all",
-			"type": "shell",
-			"command": "git add -A; git status --short; Write-Output '=== staged done ==='"
-		},
-		{
-			"label": "git-check-vscode",
-			"type": "shell",
-			"command": "git status --short .vscode/; Write-Output '=== check .vscode ==='"
-		},
-		{
-			"label": "git-check-gitignore",
-			"type": "shell",
-			"command": "Get-Content .gitignore; Write-Output '=== check-ignore ==='; git check-ignore -v .vscode/tasks.json; Write-Output '=== tasks exists ==='; Test-Path .vscode/tasks.json"
-		},
-		{
-			"label": "git-add-tasks",
-			"type": "shell",
-			"command": "git add .gitignore .vscode/tasks.json; git status --short .vscode/ .gitignore; Write-Output '=== done ==='"
-		},
-		{
-			"label": "git-commit",
-			"type": "shell",
-			"command": "git commit -m \"论坛发帖/回帖工具+旧争夺API+角色属性表+日常优化\" -m \"- tools/forum_post.py: 发帖/回帖/查回复（requests.Session+GBK编码，实测可用）\\n- docs/论坛资料/: 网站api资料(§3.6发帖)/表情对照表/帖子跟踪\\n- docs/旧争夺资料/04: 旧争夺api资料\\n- docs/咕咕镇-新争夺资料/07: 角色属性表(12卡/打野排行/切卡)\\n- ggz_daily.py: gemup改红>梦>银(复利)、沙滩刷新重试、icon正则修复\\n- tasks.json/mcp.json 入库同步；.gitignore 放行 tasks.json\\n- 修正文档链接(网站api资料.md 移到 论坛资料/)\"; Write-Output '=== commit done ==='; git log --oneline -3"
-		},
-		{
-			"label": "git-commit-f",
-			"type": "shell",
-			"command": "Set-Content -Path commit_msg.txt -Value @\"\n论坛发帖/回帖工具+旧争夺API+角色属性表+日常优化\n\n- tools/forum_post.py: 发帖/回帖/查回复（requests.Session+GBK编码，实测可用）\n- docs/论坛资料/: 网站api资料(含发帖接口)/表情对照表/帖子跟踪\n- docs/旧争夺资料/04: 旧争夺api资料\n- docs/咕咕镇-新争夺资料/07: 角色属性表(12卡/打野排行/切卡)\n- ggz_daily.py: gemup复利优先梦石、沙滩刷新重试、icon正则修复\n- tasks.json/mcp.json 入库同步；.gitignore 放行 tasks.json\n- 修正文档链接(网站api资料.md 移到 论坛资料/)\n\"@ -Encoding UTF8; git commit -F commit_msg.txt; Remove-Item commit_msg.txt; Write-Output '=== commit done ==='; git log --oneline -3"
-		},
-		{
-			"label": "write-commit-msg",
-			"type": "shell",
-			"command": "C:\\Windows\\py.exe",
-			"args": [
-				"-c",
-				"open('commit_msg.txt','w',encoding='utf-8').write('论坛发帖/回帖工具+旧争夺API+角色属性表+日常优化\\n\\n- tools/forum_post.py: 发帖/回帖/查回复（requests.Session+GBK编码，实测可用）\\n- docs/论坛资料/: 网站api资料(含发帖接口)/表情对照表/帖子跟踪\\n- docs/旧争夺资料/04: 旧争夺api资料\\n- docs/咕咕镇-新争夺资料/07: 角色属性表(12卡/打野排行/切卡)\\n- ggz_daily.py: gemup复利优先梦石、沙滩刷新重试、icon正则修复\\n- tasks.json/mcp.json 入库同步；.gitignore 放行 tasks.json\\n- 修正文档链接(网站api资料.md 移到 论坛资料/)\\n')"
-			]
-		},
-		{
-			"label": "git-commit-noedit",
-			"type": "shell",
-			"command": "git",
-			"args": [
-				"commit",
-				"--no-edit"
-			]
 		}
 	]
 }
