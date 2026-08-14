@@ -4,8 +4,12 @@
 用法:
     python tools/forum_post.py new --title "标题" --content-file body.txt [--fid 5]
     python tools/forum_post.py new --title "标题" --content "正文" [--fid 5]
+    python tools/forum_post.py new --title-file title.txt --content-file body.txt [--fid 5]  # 标题从文件首行读
     python tools/forum_post.py reply --tid 123456 --content "回复内容" [--fid 5]
     python tools/forum_post.py check --tid 123456 --sf abc
+
+标题建议用 --title-file（标题含空格/引号/括号时命令行传参易被 shell 解析坏，
+2026-08-14 踩坑教训）；标题文件取第一行，其余行忽略。
 
 接口（详见 docs/网站api资料.md §3.6）:
     发新帖: POST post.php?  action=new&step=2&fid=<版块>&tid=0&atc_title=&atc_content=&verify=
@@ -236,7 +240,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_new = sub.add_parser("new", help="发新帖")
-    p_new.add_argument("--title", required=True)
+    p_new.add_argument("--title", default=None, help="标题（--title 或 --title-file 二选一）")
+    p_new.add_argument("--title-file", default=None, help="标题从文件第一行读（避免命令行特殊字符坑）")
     p_new.add_argument("--content", default=None)
     p_new.add_argument("--content-file", default=None)
     p_new.add_argument("--fid", type=int, default=5, help="版块 id（默认 5 自由讨论区）")
@@ -261,7 +266,15 @@ def main():
         if not content:
             print("[错误] 需要 --content 或 --content-file")
             sys.exit(1)
-        new_thread(args.title, content, args.fid)
+        # 标题优先级：--title-file（文件首行） > --title
+        title = args.title
+        if args.title_file:
+            with open(args.title_file, encoding="utf-8") as f:
+                title = f.read().strip().split("\n")[0].strip()
+        if not title:
+            print("[错误] 需要 --title 或 --title-file（标题不能为空）")
+            sys.exit(1)
+        new_thread(title, content, args.fid)
     elif args.cmd == "reply":
         content = args.content
         if args.content_file:
