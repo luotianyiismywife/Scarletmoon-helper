@@ -6,6 +6,7 @@
     python tools/fetch_posts.py --limit 5  # 只抓前 5 篇（调试用）
     python tools/fetch_posts.py --tid 1052153   # 只抓指定 tid
     python tools/fetch_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md   # 抓旧争夺
+    python tools/fetch_posts.py --fid 5 --max-pages 3   # 板块扫描模式（kf-analysis 参考实现）
 
 付费帖处理（2026-08-12）:
     - 检测 "此帖售价 N KFB" 特征
@@ -267,6 +268,58 @@ def unread_posts():
     return [(d, t, u) for d, t, u, _ in rows]  # (date, title, url)
 
 
+def scan_board(session, fid, max_pages=10, disp=False):
+    """板块扫描（扒自 kf-analysis 的 parse_board_page + get_oneboard_url）。
+
+    GET thread.php?fid=<fid>&orderway=lastpost&page=N → 解析该页所有主题 (tid, sf, reply_count)。
+    翻 max_pages 页 + 最后重抓第 1 页去重（防翻页期间帖子浮动导致遗漏）。
+    返回 [(tid, sf, reply_count, title, url)]，按 tid 去重保序。
+
+    用途：比全站搜索（30次/日限制）更全的板块级扫描；每日扫咕咕镇相关板块替代搜索。
+    参考项目：github.com/kisaragizen/kf-analysis（README §CLI/包内函数）
+    """
+    def get_onepage(page):
+        url = f"{BASE}/thread.php?fid={fid}&orderway=lastpost&page={page}"
+        html = fetch_html(session, url)
+        rows = []
+        for tr in re.finditer(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+            seg = tr.group(1)
+            tit = re.search(r'class="threadtit1"', seg)
+            if not tit:
+                continue
+            # 标题: threadtit1 div 内第一个 <a title="...">（title 属性即完整标题）
+            tm = re.search(r'class="threadtit1"[\s\S]*?<a href="read\.php\?tid=(\d+)&sf=([0-9a-f]+)" title="([^"]*)"', seg)
+            if not tm:
+                continue
+            tid, sf, title = tm.group(1), tm.group(2), tm.group(3).strip()
+            # 回复数: b_tit6 的 li 内第一个数字（后跟浏览数）
+            b6 = re.search(r'class="b_tit6"[\s\S]*?<li>[\s\S]*?(\d+)<br', seg)
+            reply_count = int(b6.group(1)) if b6 else 0
+            rows.append((int(tid), sf, reply_count, title[:80]))
+        if disp:
+            print(f"  板块 {fid} 第 {page} 页: {len(rows)} 条")
+        return rows
+
+    result = []
+    for page in range(1, max_pages + 1):
+        try:
+            result += get_onepage(page)
+        except Exception as e:
+            print(f"  ⚠️ 板块 {fid} 第 {page} 页失败: {e}")
+        time.sleep(0.8)
+    # 翻页结束后重抓第 1 页（防浮动遗漏）→ 插入最前去重
+    try:
+        result = get_onepage(1) + result
+    except Exception:
+        pass
+    seen, out = {}, []
+    for x in result:
+        if x[0] not in seen:
+            seen[x[0]] = x
+            out.append(x)
+    return [(tid, sf, rc, title, f"{BASE}/read.php?tid={tid}&sf={sf}") for tid, sf, rc, title in out]
+
+
 def main():
     global RAW_DIR, MD_PATH
     ap = argparse.ArgumentParser()
@@ -277,9 +330,21 @@ def main():
     ap.add_argument("--index", default=DEFAULT_INDEX, help="索引文件名")
     ap.add_argument("--images", action="store_true",
                     help="提取图片URL写入正文文件, 并下载到 raw/img/<tid>/ (已抓过的帖也会回填)")
+    ap.add_argument("--fid", type=int, default=0,
+                    help="板块扫描模式：扫 thread.php?fid=<fid> 全部分页主题并打印（替代搜索，无30次/日限制）")
+    ap.add_argument("--max-pages", type=int, default=10, help="板块扫描最大页数（默认10）")
     args = ap.parse_args()
     RAW_DIR = os.path.join(ROOT, "docs", args.dir, "raw")
     MD_PATH = os.path.join(ROOT, "docs", args.dir, args.index)
+
+    # 板块扫描模式（kf-analysis 参考实现）
+    if args.fid:
+        session = make_session()
+        rows = scan_board(session, args.fid, max_pages=args.max_pages, disp=True)
+        print(f"\n板块 {args.fid} 共 {len(rows)} 个主题（去重）:")
+        for tid, sf, rc, title, url in rows:
+            print(f"  {tid} [{rc:>4}回] {title}  {url}")
+        return
 
     posts = unread_posts()
     if args.tid:

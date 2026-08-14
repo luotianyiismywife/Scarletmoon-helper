@@ -137,6 +137,50 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 | `diy_read_tui.php` | 推帖（POST，需 safeid） |
 | `post.php` | 发帖/回复（详见 3.6） |
 
+### 3.5b 板块扫描 / 楼层精确解析 / 帖子状态（2026-08-14 扒自 kf-analysis ⭐）
+
+> 参考项目：**`github.com/kisaragizen/kf-analysis`**（绯月论坛活跃度分析 v2.0.0，SQLite 存 20 万+ 回复实测）。
+> 该项目无私有接口（全 GET 公开页），但解析逻辑完善，以下均照搬/改造。
+
+#### 板块扫描：`/thread.php?fid=X&orderway=lastpost&page=N`
+- **用途**：按板块扫全部主题（tid/sf/标题/回复数），**替代全站搜索**（无 30 次/日限制）
+- 翻 N 页（默认 10）+ **最后重抓第 1 页去重**（防翻页期间帖子浮动遗漏）
+- 行结构（每主题一个 `<tr>`）：
+  ```html
+  <tr>
+    <td><a href="read.php?tid=1083618&sf=267">新</a></td>  <!-- 新帖标记 -->
+    <td><div class="threadtit1"><a href="read.php?tid=1083618&sf=267" title="完整标题">标题</a></div></td>
+    <td><ul class="b_tit6"><li><a href="...">8<br><span>140</span></a></li></ul></td>  <!-- 8回复/140浏览 -->
+    <td><a href="profile.php?action=show&uid=768869" class="bl">yeybsghhz</a> | 21:10<br>最后回复者 | 23:43</td>
+  </tr>
+  ```
+- **关键解析点**：标题取 `<a title="...">` 属性（非标签文本，文本可能是"新"标记）；回复数取 `b_tit6` 的 `<li>` 内第一个数字（后随浏览数）
+- **工具**：`fetch_posts.py --fid <板块id> [--max-pages N]`（实测：fid=5 自由讨论区，60 条/页）
+
+#### 楼层精确解析：`/read.php?tid=X&sf=Y`（`parse_replies` 逻辑）
+- 每楼 `.readtext` 块（id 为 `pidtpc`=楼主 / `pid<数字>`=回复）：
+  - 回复者：`div.readidmsbottom a` → 文本=用户名，href=`profile.php?action=show&uid=<uid>&sf=<sf>`（拆 uid+sf）
+  - 楼层号：`<span style='font-size:16px;font-weight:bold'>`（"楼主"=0 层）
+  - 回帖时间：`<div style='line-height:30px'>` 内 `#999999` 色 span，`%Y-%m-%d %H:%M`
+  - 正文：`.readtext` 内 `菜单</a>` 之后 → `</table>` 之前
+  - 关键词@列表、图片列表、权限框（`complete` 状态）均可提取
+- **回复 id 规则**：楼主 = `TPC<tid>`；回复 = `PID<pid>`（大写）
+
+#### 帖子状态判定（`check_page_status`）
+| 状态 | 判定 | 含义 |
+|------|------|------|
+| normal | 正常正文 | 可抓 |
+| closed | 页面含关闭标记 | 被管理员关闭（存占位） |
+| deleted | 页面含删除标记 | 被删除（存占位） |
+| incorrect | 无此帖/安全码错 | 不存 |
+
+#### 增量抓取策略（`save_incremental_tx`）
+- 存 `reply_count`，下次抓只抓新楼层：`db_total < reply_count` 时从 `db_total//20+1` 页开始（20 楼/页）——比全量重抓省大量请求
+
+#### 其他可扒（kf-analysis 已实现）
+- `profile.php?action=show&uid=X&sf=Y` 用户主页解析（`parse_profile_page`）
+- 付费帖购买封装（`buy_topic`，mode=buy 执行购买）——我们已用 `fetch_posts.py` 实现同类功能（≤10 KFB 自动买）
+
 ### 3.6 发帖 / 回帖：`/post.php`（2026-08-14 浏览器+脚本实测 ⭐）
 
 **已实现脚本**：`tools/forum_post.py`（new 发帖 / reply 回帖 / check 查回复）。
