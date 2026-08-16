@@ -154,6 +154,21 @@ def login_and_refresh():
     return all_cookies
 
 
+def load_existing():
+    """读取现有 cookie.txt 的 (name, value) 列表（用于合并，避免 --game/--forum
+    单独提取时把另一个域的清掉——2026-08-16 踩坑：--game 覆盖后论坛 2ed4e_* 丢失，
+    forum_post.py 全被重定向 login.php）。"""
+    if not os.path.exists(OUTPUT):
+        return []
+    raw = open(OUTPUT, encoding="utf-8").read()
+    result = []
+    for part in raw.split(";"):
+        name, _, val = part.strip().partition("=")
+        if name:
+            result.append((name, val))
+    return result
+
+
 def main():
     if "--login" in sys.argv:
         cookies = login_and_refresh()
@@ -169,11 +184,14 @@ def main():
         print("[错误] 没有任何 Cookie")
         sys.exit(1)
 
-    cookie_str = "; ".join(f"{name}={value}" for name, value in cookies)
+    # 合并写入：新提取的覆盖同名 cookie，未提取的域保留（防丢失）
+    merged = dict(load_existing())
+    merged.update(cookies)
+    cookie_str = "; ".join(f"{name}={value}" for name, value in merged.items())
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(cookie_str)
 
-    print(f"[完成] 共 {len(cookies)} 个 Cookie, 已写入 {os.path.normpath(OUTPUT)}")
+    print(f"[完成] 共 {len(cookies)} 个 Cookie 更新（合并后共 {len(merged)} 个），已写入 {os.path.normpath(OUTPUT)}")
 
 
 if __name__ == "__main__":

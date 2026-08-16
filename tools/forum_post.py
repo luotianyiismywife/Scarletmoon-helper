@@ -6,6 +6,8 @@
     python tools/forum_post.py new --title "标题" --content "正文" [--fid 5]
     python tools/forum_post.py new --title-file title.txt --content-file body.txt [--fid 5]  # 标题从文件首行读
     python tools/forum_post.py reply --tid 123456 --content "回复内容" [--fid 5]
+    python tools/forum_post.py reply --tid 123456 --content "内容" --floor 8         # 回复 8 楼
+    python tools/forum_post.py reply --tid 123456 --content "内容" --floors "8,9"   # 一次回复 8/9 两楼
     python tools/forum_post.py check --tid 123456 --sf abc
 
 标题建议用 --title-file（标题含空格/引号/括号时命令行传参易被 shell 解析坏，
@@ -155,8 +157,16 @@ def new_thread(title, content, fid=5):
     return tid, f"{BASE}/read.php?tid={tid}&sf={sf_v}"
 
 
-def reply(tid, content, fid=None, sf=""):
-    """回帖。fid 缺省时从 read.php 回复表单动态提取（更稳）。"""
+def reply(tid, content, fid=None, sf="", floor=None, floors=None):
+    """回帖（可选回复指定楼层 / 多楼层）。
+
+    PHPWind 无 article 字段（2026-08-16 实测），"回复楼层" = 正文加
+    [quote]回 N楼(作者) 的帖子[/quote] 前缀 + diy_guanjianci 设作者名（@对方），
+    与前端 postreply() 行为一致。
+    floor: 0=楼主 / 1=第1个回复 / 2=第2个回复 ...（None 不指定楼层）
+    floors: 逗号分隔多楼层（如 "8,9"），正文拼多个 [quote] 前缀（一次回复多楼，
+            2026-08-16 浏览器实测成功）
+    """
     read_url = f"{BASE}/read.php?tid={tid}" + (f"&sf={sf}" if sf else "")
     _, page = http(read_url, referer=BASE + "/index.php")
     if "login.php?action=quit" not in page:
@@ -170,11 +180,39 @@ def reply(tid, content, fid=None, sf=""):
     if fid is None:
         fm = re.search(r'name="fid"\s+value="(\d+)"', page)
         fid = int(fm.group(1)) if fm else 5
+
+    # 收集所有楼层的 postreply('回 N楼(作者) 的帖子','作者') 模板
+    # （每个回复一个；0=楼主）
+    floor_authors = {}
+    for m in re.finditer(r"postreply\('回 (\d+)楼\(([^)]+)\) 的帖子','([^']*)'\)", page):
+        floor_authors[int(m.group(1))] = (m.group(2).strip(), m.group(3).strip())
+
+    targets = []
+    if floors:
+        targets = [int(x) for x in floors.split(",") if x.strip()]
+    elif floor is not None:
+        targets = [floor]
+
+    quote_prefix, keyword = "", ""
+    if targets:
+        parts = []
+        authors = []
+        for f in targets:
+            if f not in floor_authors:
+                print(f"[错误] 未找到 {f} 楼（postreply 匹配失败，楼层可能不存在或页面无此格式）")
+                sys.exit(1)
+            author, kw = floor_authors[f]
+            parts.append(f"[quote]回 {f}楼({author}) 的帖子[/quote]")
+            authors.append(author)
+            print(f"[0] 回复 {f} 楼（作者 {author}）")
+        quote_prefix = "\r\n".join(parts) + "\r\n"
+        keyword = ",".join(authors)  # 逗号分隔多作者，渲染成多个关键词
+
     print(f"[1] verify={verify} fid={fid} tid={tid}")
     fields = {
-        "diy_guanjianci": "",
+        "diy_guanjianci": keyword,
         "atc_title": "none", "atc_usesign": "1", "atc_convert": "1", "atc_autourl": "1",
-        "atc_content": content,
+        "atc_content": quote_prefix + content,
         "step": "2", "action": "reply",
         "fid": str(fid), "tid": str(tid), "verify": verify,
         "Submit": "回复帖子",
@@ -252,6 +290,8 @@ def main():
     p_reply.add_argument("--content-file", default=None)
     p_reply.add_argument("--fid", type=int, default=None, help="缺省自动从帖子页提取")
     p_reply.add_argument("--sf", default="")
+    p_reply.add_argument("--floor", type=int, default=None, help="回复指定楼层：0=楼主 / 1=第1个回复 / 2=第2个回复...（默认不指定，普通回帖）")
+    p_reply.add_argument("--floors", default=None, help="一次回复多个楼层：逗号分隔，如 '8,9'（正文拼多个 [quote] 前缀 + 关键词多作者，2026-08-16 实测）")
 
     p_check = sub.add_parser("check", help="查回复")
     p_check.add_argument("--tid", required=True)
@@ -283,7 +323,7 @@ def main():
         if not content:
             print("[错误] 需要 --content 或 --content-file")
             sys.exit(1)
-        reply(args.tid, content, args.fid, args.sf)
+        reply(args.tid, content, args.fid, args.sf, floor=args.floor, floors=args.floors)
     elif args.cmd == "check":
         check(args.tid, args.sf)
 

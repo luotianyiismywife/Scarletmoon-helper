@@ -216,6 +216,44 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
    ```
    `page=e&#a` = 跳到最后一页并定位到新回复。
 
+#### 回复指定楼层 / 多楼层（2026-08-16 浏览器实测 ⭐）
+> PHPWind **没有 article/pid 隐藏字段**（表单里 `pid`、`article` 为空）——"回复楼层"不是字段，
+> 而是 **正文加 `[quote]` 前缀 + 关键词 @作者**，与前端 `postreply()` 一致：
+> ```js
+> function postreply(txta, txtb){
+>   document.FORM.atc_content.value = '[quote]'+txta+'[/quote]\r\n';
+>   document.FORM.diy_guanjianci.value = txtb;
+> }
+> ```
+
+**单楼层**（每个楼层"回复"按钮的 onclick 提供模板）：
+```html
+<a onclick="postreply('回 8楼(无言的喧嚣) 的帖子','无言的喧嚣');">回复</a>
+```
+- `atc_content` = `[quote]回 8楼(无言的喧嚣) 的帖子[/quote]\r\n` + 正文
+- `diy_guanjianci` = 作者名（@对方，渲染成关键词链接）
+
+**多楼层（一次回复多个楼层，2026-08-16 实测成功）⭐**：
+- 前端 `postreply()` 是**覆盖式赋值**（连点多个"回复"不会累积）——多楼层需**手工拼接**：
+  ```
+  atc_content = "[quote]回 8楼(无言的喧嚣) 的帖子[/quote]\r\n"
+              + "[quote]回 9楼(zerostar) 的帖子[/quote]\r\n"
+              + "正文内容"
+  diy_guanjianci = "无言的喧嚣,zerostar"   # 逗号分隔，多个作者
+  ```
+- 服务器接受并渲染成多个独立 **Quote: 回 N楼(作者)** 块（实测 11 楼：`Quote: 回 8楼…` + `Quote: 回 9楼…`）
+- 关键词渲染：`无言的喧嚣 . zerostar .`（作者间用 `.` 分隔）
+- 楼层号规则：**0 = 楼主**，1/2/3… = 第 1/2/3 个回复（页面 `postreply('回 N楼(作者) 的帖子')` 即楼层号）
+
+**楼层号/作者提取**：从帖子页抓所有 `postreply('回 N楼(作者) 的帖子','作者')`（每个回复一个），
+按 N 匹配目标楼层取作者。已实现于 `tools/forum_post.py reply(--floor N)`；多楼层建议
+`--floors "8,9"`（逗号分隔）→ 逐个提取作者拼多个 `[quote]` 前缀。
+
+**⚠️ 删除自己回复**：PHPWind 普通用户**无删除权限**（页面只有"编辑帖子"无"删除"）。
+编辑接口 `post.php?action=modify&fid=<fid>&tid=<tid>&pid=<pid>&article=<楼层>`（测试 08-16
+验证：编辑页被重定向搜索页，疑似需要更高权限/特殊 sf）。测试回帖只能**改内容为正常文本**
+或留着——发测试帖前先用小号/低价值帖验证。
+
 #### 字段说明
 | 字段 | 说明 |
 |------|------|
