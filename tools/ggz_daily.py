@@ -586,21 +586,43 @@ def parse_pk():
 
 
 def pk(max_fights=20, full=False):
-    """[5] 出击打野。默认拿满 3 狗牌即停；--full 打满 max_fights 次。"""
+    """[5] 出击。默认拿满 3 狗牌即停；--full 打满 max_fights 次。
+
+    策略（2026-08-16 用户指定）：**优先打人**（id=2，胜利 +3% 进度），
+    打不过（lose）或轮空（retry）再切打野（id=1，胜利 +1%）。
+    打野也失败 → 停止（避免掉段刷狗牌，CC 段打野稳赢）。
+    """
+    # 当前模式: pvp(打人) / pve(打野)。开局先试打人。
+    mode = "pvp"
     for i in range(1, max_fights + 1):
         st = parse_pk()
-        print(f"\n--- 出击 #{i} 前状态: 段位{st['段位']} {st['进度']} 狗牌{st['狗牌']}/{st['出击']} 连胜{st['连胜']} 连败{st['连败']} ---")
+        print(f"\n--- 出击 #{i} 前状态: 段位{st['段位']} {st['进度']} 狗牌{st['狗牌']}/{st['出击']} 连胜{st['连胜']} 连败{st['连败']} 模式={mode} ---")
         if not full and int(st["狗牌"]) >= 3:
             print("✅ 已拿满 3 狗牌，停止出击（--full 可打满）")
             break
-        kind, r = fight(1)
-        print(f"出击结果: {kind}")
+        # 模式决策: 打人失败/轮空 → 切打野; 打野失败 → 停止
+        target = 2 if mode == "pvp" else 1
+        kind, r = fight(target)
+        target_name = "打人" if target == 2 else "打野"
+        print(f"出击结果: {kind}（{target_name}）")
         if kind == "limit":
             print("出击次数达上限")
             break
         if kind == "retry" or kind == "draw":
-            # 不计次数，继续
+            # 不计次数。打人轮空/平局 → 切打野; 打野轮空/平局 → 保持(继续试)
+            if target == 2:
+                print("  ↪ 打人轮空/平局，切打野")
+                mode = "pve"
             continue
+        if kind == "lose":
+            if target == 2:
+                print("  ↪ 打人失败，切打野")
+                mode = "pve"
+            else:
+                print("  ⏹ 打野失败，停止出击（避免连败掉段）")
+                break
+            continue
+        # win: 保持当前模式
         st = parse_pk()
         print(f"出击后: 狗牌{st['狗牌']} 出击{st['出击']} 连胜{st['连胜']} 连败{st['连败']}")
     print("\n=== 出击结束 ===")
