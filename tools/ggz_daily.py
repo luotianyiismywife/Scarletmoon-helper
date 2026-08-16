@@ -22,10 +22,15 @@ import os
 import re
 import sys
 import time
-import urllib.request
-import urllib.parse
+import random
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+try:
+    import requests
+except ImportError:
+    print("[错误] 缺少 requests 库，请先安装: pip install requests")
+    sys.exit(1)
 
 BASE = "https://www.momozhen.com"
 
@@ -40,32 +45,42 @@ COOKIE = load_cookie()
 USER = None   # 动态: 主页提取
 ZID = None    # 动态: f=8 出战中角色
 
+# requests.Session：连接池 + keep-alive 复用连接，规避 urllib 每次新建 TLS
+# 握手被服务器限流（SSL 断开/返回空）的问题（2026-08-16 实测，05 文档 §4.5）
+_SESSION = requests.Session()
+_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
+    "Referer": BASE + "/fyg_index.php",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Connection": "keep-alive",
+})
+
 
 def request(url, data=None, retries=3, xhr=True):
-    """HTTP 请求，带重试（momozhen SSL 偶发断开）。
+    """HTTP 请求，带重试（requests.Session 连接复用）。
 
     xhr=True 时带 X-Requested-With: XMLHttpRequest 头——服务器对带此头的请求
     返回 JS 动态加载的内容（如装备页道具栏），静态请求拿不到（2026-08-13 实测）。
+    返回 bytes（与旧 urllib 版本接口兼容，dec() 解码）。
     """
-    body = urllib.parse.urlencode(data).encode() if data else None
     last_err = None
     for attempt in range(retries):
         try:
-            headers = {
-                "Cookie": COOKIE,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
-                "Referer": BASE + "/fyg_index.php",
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            }
+            headers = {"Cookie": COOKIE}
             if xhr:
                 headers["X-Requested-With"] = "XMLHttpRequest"
-            req = urllib.request.Request(url, data=body, headers=headers)
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
+            if data is not None:
+                headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+            resp = _SESSION.post(url, data=data, headers=headers, timeout=60) \
+                if data is not None else _SESSION.get(url, headers=headers, timeout=60)
+            return resp.content
         except Exception as e:
             last_err = e
-            print(f"  ⚠️ 请求重试 {attempt + 1}/{retries}: {e}")
-            time.sleep(2)
+            # 指数退避 + 随机 jitter，避免重试同步触发限流（05 文档 §4.5）
+            wait = (2 ** attempt) + random.uniform(0, 0.5)
+            print(f"  ⚠️ 请求重试 {attempt + 1}/{retries}: {e}（{wait:.1f}s 后重试）")
+            time.sleep(wait)
     raise last_err
 
 
@@ -199,7 +214,11 @@ def wish():
     print(f"贝壳: {coins}")
     if coins >= 300000:
         r = click(18, id=1)
-        show("c=18 许愿返回", r)
+        if "已经许愿" in r or "请明天" in r:
+            # 服务器权威判定已许愿（f=19 fields[2] 不可靠，2026-08-16 实测）
+            print("今日已许愿（服务器确认），跳过")
+        else:
+            show("c=18 许愿返回", r)
     else:
         print("贝壳 < 30w，跳过许愿")
 
@@ -332,9 +351,15 @@ def parse_equips(html, want_id=False):
         # ⚠️ 真实路径 icon/ 后带一层 z/ 子目录（2026-08-14 实测）；(?:/z)? 兼容新旧两种写法
         m = re.search(r"ys/icon/z(?:/z)?(\d{4})(?:_(\d))?\.gif", btn)
         icon, quality = (m.group(1), int(m.group(2)) if m and m.group(2) else 0) if m else ("", 0)
-        # title: Lv.<span>100</span> <span>星级</span><br>装备名
+        # title: Lv.<span>100</span> <span>星级</span><br>装备名（f=1 沙滩）
+        #       Lv.<span class='fyg_f18'>100</span> 装备名（f=6 身上，无 <br>，2026-08-16 实测）
         m = re.search(r'title="Lv\.<span[^>]*>(\d+)</span>[\s\S]*?(?:<br|</span>)([^"<]*?)(?:"|$)', btn)
-        level, name = (m.group(1), m.group(2).strip()) if m else ("?", "?")
+        if m:
+            level, name = m.group(1), m.group(2).strip()
+        else:
+            # f=6 身上: title="Lv.<span class='fyg_f18'>100</span> 探险者之剑"
+            m2 = re.search(r'</span>\s*([^"<]+?)"', btn)
+            level, name = ("?", m2.group(1).strip()) if m2 else ("?", "?")
         total = 0.0
         # 词条颜色统计（2026-08-13 实测 class：danger=红 warning=橙 info=蓝 primary=紫 success=绿）
         has_orange = False
@@ -397,44 +422,54 @@ def equip_decision(it, worn):
         threshold = 450 if it["has_high"] else 500
         if it["total"] >= threshold:
             return "take"
-    # ⑤ 同部位对比：icon 前 3 位（z21x武器/z22x手环/z23x衣服/z24x饰品）
-    slot = it["icon"][:3] if len(it["icon"]) >= 3 else ""
-    same = [w for w in worn if w["icon"][:3] == slot]
+    # ⑤ 同部位对比：icon 数字前 2 位 = 部位类（21武器/22手环/23衣服/24饰品）
+    # ⚠️ 2026-08-16 实测修复：旧代码 icon[:3] 把武器内部子类(2101/2111)当不同部位，
+    #    导致 211x 武器 vs 身上 210x 武器误判“空部位”→ 白板/蓝装武器全入仓。
+    slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
+    same = [w for w in worn if w["icon"][:2] == slot]
     if not same:
         return "take"  # 空部位直接收
     best = max(w["total"] for w in same)
     return "take" if it["total"] > best else "clear"
 
 
-def beach():
+def beach(allow_refresh=True):
     """[4] 沙滩收取 + 清理（4.5 规则）。
 
     流程：读 f=1 沙滩 + f=6 身上 → 逐件决策 → 先 c=1 拾取要收的 → 再 c=20 清理剩余。
-    沙滩空但有随机装备箱 → 自动强制刷新（c=12）再筛。
+    沙滩空但有随机装备箱 → 自动强制刷新（c=12）再筛（allow_refresh=False 时跳过，
+    供 beach_refresh 调用避免二次刷新白耗箱子）。
     ⚠️ 沙滩 id 拾取后重排：逐件拾取后重新读 f=1 抓新 id。
     """
     t1 = read_block(1)
     items = parse_equips(t1, want_id=True)
     if not items:
-        # 沙滩空 → 有装备箱则强制刷新
+        # ⚠️ 沙滩空 → c=12 自动刷新（2026-08-16 实测改版）：
+        # c=12 后 f=1 空窗期实测仅 ~64 秒（探针 2s 轮询：+64s 读到 10 件），
+        # 旧代码 12 秒重试窗口不够 → 误判"读不到"。重试窗口改为 45×2s=90s 覆盖。
+        # （2026-08-14 曾误判空窗几秒→无效修复；08-16 又误判 10 分钟→过度禁止，
+        #   本次探针实测纠正：64 秒即可。）
         boxes = get_items().get("it004", 0)
         print(f"沙滩空，无装备（随机装备箱持有 {boxes}）")
-        if boxes > 0:
-            print("→ 有装备箱，强制刷新沙滩...")
+        if allow_refresh and boxes > 0:
+            print("→ 有装备箱，自动强制刷新沙滩...")
             r = click(12)
             show("c=12 刷新沙滩返回", r)
-            # ⚠️ c=12 刷新后服务器异步落库，立即读 f=1 往往还是空的（2026-08-14 踩坑：
-            # 因此拾取/清理全被跳过）。等待 + 重试直到装备出现。
-            for attempt in range(6):
-                time.sleep(2)
-                t1 = read_block(1)
-                items = parse_equips(t1, want_id=True)
-                if items:
-                    print(f"  刷新后第 {attempt + 1} 次读取到 {len(items)} 件装备")
-                    break
-            else:
-                print("  ⚠️ 刷新后重试 6 次仍未读到装备（可能服务器延迟/限流）")
+        elif allow_refresh:
+            print("→ 无随机装备箱，跳过")
+            return
         else:
+            print("→ 刚刷新过（allow_refresh=False），等待空窗期过去...")
+        # 空窗期 ~64s：45 次 × 2s = 90s，覆盖空窗 + 限流重试
+        for attempt in range(45):
+            time.sleep(2)
+            t1 = read_block(1)
+            items = parse_equips(t1, want_id=True)
+            if items:
+                print(f"  刷新后第 {attempt + 1} 次（{(attempt + 1) * 2}s）读取到 {len(items)} 件装备")
+                break
+        else:
+            print("  ⚠️ 刷新后 90s 仍未读到装备（可能服务器延迟/限流，可稍后重跑 beach）")
             return
     worn = parse_equips(read_block(6))
     print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
@@ -502,7 +537,11 @@ def smelt():
 
 
 def beach_refresh():
-    """[4.5] 强制刷新沙滩（耗 1 随机装备箱，c=12）→ 刷新后按 4.5 规则再筛一轮"""
+    """[4.5] 强制刷新沙滩（耗 1 随机装备箱，c=12）→ 刷新后按 4.5 规则再筛一轮
+
+    ⚠️ 2026-08-16：beach 已恢复自动刷新，这里先 c=12 再调 beach 会二次刷新白耗箱子，
+    故传 allow_refresh=False 让 beach 只等空窗期不重复刷。
+    """
     boxes = get_items().get("it004", 0)
     print(f"随机装备箱持有: {boxes}")
     if boxes <= 0:
@@ -510,7 +549,7 @@ def beach_refresh():
         return
     r = click(12)
     show("c=12 刷新沙滩返回", r)
-    beach()
+    beach(allow_refresh=False)
 
 
 def fight(target=1):
