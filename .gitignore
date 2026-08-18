@@ -12,5 +12,8 @@ node_modules/
 # 论坛 Cookie（登录凭证，不入库）
 cookie.txt
 
+# 本地运行日志（ggz_daily.py 等生成）
+logs/
+
 # Python ����
 tools/__pycache__/

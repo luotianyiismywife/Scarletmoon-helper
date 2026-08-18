@@ -8,13 +8,16 @@
     python tools/ggz_daily.py gemup         # [1.5] 提升宝石（B以下只升梦>红>银；比例低优先）
     python tools/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
     python tools/ggz_daily.py wish          # [3] 许愿池（贝壳≥30w 且今日未许愿）
-    python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新）
+    python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新；--no-refresh 禁用自动刷新不耗箱）
     python tools/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
     python tools/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
     python tools/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
     python tools/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
     python tools/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水）
     python tools/ggz_daily.py all           # 一键日常（以上全部按序执行）
+
+日志: 每次执行同时输出到终端 + logs/ggz_YYYYMMDD.log（完整留档，
+      终端输出被吞/截断时以日志文件为准）。
 
 依赖: cookie.txt（tools/get_cookies.py --login 或提取生成）
 """
@@ -23,6 +26,7 @@ import re
 import sys
 import time
 import random
+import datetime
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -33,6 +37,56 @@ except ImportError:
     sys.exit(1)
 
 BASE = "https://www.momozhen.com"
+
+
+class AuthExpiredError(RuntimeError):
+    """咕咕镇 cookie 失效（单会话被浏览器顶掉 / 每日刷新）。
+
+    服务器对失效会话返回"请重新登录并刷新！"。此前脚本会把这 9 个字符
+    当普通 HTML 解析 → 0 件装备/0 道具 → 静默误判"沙滩空"跳过（2026-08-18 事故）。
+    恢复：浏览器走入口链刷新游戏 cookie 后重跑 tools/get_cookies.py --game。
+    """
+
+
+class Tee:
+    """同时输出到多个流（终端 + 日志文件），保证执行过程完整留档。
+
+    2026-08-17：PowerShell 偶发抽风会吞掉/截断脚本输出，
+    加日志文件兜底（logs/ggz_YYYYMMDD.log）。
+    """
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def setup_logging():
+    """重定向 stdout/stderr 到 终端 + logs/ggz_YYYYMMDD.log（追加）。
+    必须在任何输出前调用。
+    """
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "ggz_%s.log" % datetime.date.today().strftime("%Y%m%d"))
+    log_fp = open(log_path, "a", encoding="utf-8")
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_fp.write("\n" + "=" * 60 + "\n" + f"[{ts}] 新会话开始\n" + "=" * 60 + "\n")
+    log_fp.flush()
+    sys.stdout = Tee(sys.__stdout__, log_fp)
+    sys.stderr = Tee(sys.__stderr__, log_fp)
+    print(f"[日志] 已写入 {os.path.relpath(log_path, os.path.dirname(os.path.abspath(__file__)) + os.sep + os.pardir)}")
 
 
 def load_cookie():
@@ -74,7 +128,15 @@ def request(url, data=None, retries=3, xhr=True):
                 headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
             resp = _SESSION.post(url, data=data, headers=headers, timeout=60) \
                 if data is not None else _SESSION.get(url, headers=headers, timeout=60)
+            # ⚠️ cookie 失效检测（2026-08-18）：咕咕镇单会话，浏览器重新打开游戏页
+            # 会把脚本会话顶掉，此时任何重试都无意义，直接报错提示重抓 cookie。
+            if "重新登录".encode("utf-8") in resp.content:
+                raise AuthExpiredError(
+                    "咕咕镇 cookie 已失效（浏览器登录顶掉/每日刷新），"
+                    "请刷新游戏 cookie 后重跑 tools/get_cookies.py --game")
             return resp.content
+        except AuthExpiredError:
+            raise
         except Exception as e:
             last_err = e
             # 指数退避 + 随机 jitter，避免重试同步触发限流（05 文档 §4.5）
@@ -433,17 +495,77 @@ def equip_decision(it, worn):
     return "take" if it["total"] > best else "clear"
 
 
-def beach(allow_refresh=True):
+def _read_beach(retries=3, interval=3):
+    """读取 f=1 沙滩并解析装备列表，带重试和有效性验证。
+
+    返回 (items, raw_text)：
+      items: 解析出的装备列表（可能为空 = 沙滩真空）
+      raw_text: f=1 原始返回文本（供诊断）
+
+    ⚠️ 2026-08-18 踩坑修复：
+      旧代码 read_block(1) 返回空/异常时直接当"沙滩空"处理，
+      实际可能是限流（服务器返回空 body）或会话失效（返回"请重新登录"）。
+      现在先验证返回内容有效性，无效则重试；重试仍失败则抛异常而非静默跳过。
+
+    验证规则：
+      - 返回 <20 字符 → 大概率空响应/限流，重试
+      - 含"请重新登录"/"登录" → 会话失效，直接报错（重试无意义）
+      - 含 "<button" 但 parse_equips 解析 0 件 → HTML 格式变化，报警但继续
+      - 返回正常 HTML 且无 button → 沙滩真空
+    """
+    last_raw = ""
+    for attempt in range(retries):
+        raw = read_block(1)
+        last_raw = raw
+        # 会话失效：不重试，直接报错
+        if "请重新登录" in raw or ("登录" in raw and len(raw) < 100):
+            raise RuntimeError(
+                f"沙滩读取失败：会话已失效（f=1 返回 {len(raw)} 字符: {raw[:80]!r}）。\n"
+                "→ 请运行 py tools/get_cookies.py --game 刷新 cookie.txt"
+            )
+        # 空响应/极短返回：大概率限流，等待后重试
+        if len(raw) < 20:
+            print(f"  ⚠️ f=1 返回异常短（{len(raw)} 字符），疑似限流，{interval}s 后重试 ({attempt+1}/{retries})")
+            time.sleep(interval)
+            continue
+        # 有效 HTML：尝试解析
+        items = parse_equips(raw, want_id=True)
+        if items:
+            return items, raw
+        # 有 button 标签但解析 0 件 → 格式可能变了
+        if "<button" in raw and "ys/icon/z" in raw:
+            print(f"  ⚠️ f=1 含装备按钮但 parse_equips 解析 0 件（HTML 格式可能变化），重试 ({attempt+1}/{retries})")
+            time.sleep(interval)
+            continue
+        # 正常 HTML 但无装备按钮 → 沙滩真空
+        return [], raw
+    # 重试耗尽
+    print(f"  ⚠️ f=1 重试 {retries} 次仍无法读取沙滩（最后返回 {len(last_raw)} 字符: {last_raw[:120]!r}）")
+    return [], last_raw
+
+
+def beach(allow_refresh=True, wait_after_refresh=True):
     """[4] 沙滩收取 + 清理（4.5 规则）。
 
     流程：读 f=1 沙滩 + f=6 身上 → 逐件决策 → 先 c=1 拾取要收的 → 再 c=20 清理剩余。
     沙滩空但有随机装备箱 → 自动强制刷新（c=12）再筛（allow_refresh=False 时跳过，
     供 beach_refresh 调用避免二次刷新白耗箱子）。
-    ⚠️ 沙滩 id 拾取后重排：逐件拾取后重新读 f=1 抓新 id。
+    wait_after_refresh=False：沙滩空时直接跳过不等待（--no-refresh 场景，
+    保留装备箱供测试，不耗 c=12）。
+
+    ⚠️ 踩坑记录（2026-08-18 重写）：
+      1. f=1 返回空/异常 ≠ 沙滩空：旧代码不区分"读取失败"和"真空"，
+         限流返回空 body 时误判沙滩空 → 跳过清理。现在 _read_beach() 带重试验证。
+      2. 会话失效（"请重新登录"）：cookie 被浏览器顶掉时 f=1 返回 9 字符提示，
+         旧代码当"空"处理。现在直接 raise 提示重抓 cookie。
+      3. 沙滩 id 拾取后重排：逐件拾取后剩余 id 全变，禁止复用旧 id。
+      4. c=12 刷新后空窗期 ~64s：45×2s=90s 重试窗口覆盖。
+      5. 限流：momozhen 对连续请求限流（返回空/SSL 断开），requests.Session 已缓解，
+         但高频场景仍需间隔 ≥2s。
     """
-    t1 = read_block(1)
-    items = parse_equips(t1, want_id=True)
+    items, raw = _read_beach()
     if not items:
+        # 确认是真空（_read_beach 已排除限流/会话失效）
         # ⚠️ 沙滩空 → c=12 自动刷新（2026-08-16 实测改版）：
         # c=12 后 f=1 空窗期实测仅 ~64 秒（探针 2s 轮询：+64s 读到 10 件），
         # 旧代码 12 秒重试窗口不够 → 误判"读不到"。重试窗口改为 45×2s=90s 覆盖。
@@ -458,13 +580,15 @@ def beach(allow_refresh=True):
         elif allow_refresh:
             print("→ 无随机装备箱，跳过")
             return
+        elif not wait_after_refresh:
+            print("→ 用户指定不刷新（--no-refresh），跳过沙滩（保留装备箱）")
+            return
         else:
             print("→ 刚刷新过（allow_refresh=False），等待空窗期过去...")
         # 空窗期 ~64s：45 次 × 2s = 90s，覆盖空窗 + 限流重试
         for attempt in range(45):
             time.sleep(2)
-            t1 = read_block(1)
-            items = parse_equips(t1, want_id=True)
+            items, raw = _read_beach(retries=1)  # 轮询中单次读取即可
             if items:
                 print(f"  刷新后第 {attempt + 1} 次（{(attempt + 1) * 2}s）读取到 {len(items)} 件装备")
                 break
@@ -549,7 +673,7 @@ def beach_refresh():
         return
     r = click(12)
     show("c=12 刷新沙滩返回", r)
-    beach(allow_refresh=False)
+    beach(allow_refresh=False, wait_after_refresh=True)
 
 
 def fight(target=1):
@@ -588,9 +712,11 @@ def parse_pk():
 def pk(max_fights=20, full=False):
     """[5] 出击。默认拿满 3 狗牌即停；--full 打满 max_fights 次。
 
-    策略（2026-08-16 用户指定）：**优先打人**（id=2，胜利 +3% 进度），
+    策略（2026-08-17 用户改版）：**优先打人**（id=2，胜利 +3% 进度），
     打不过（lose）或轮空（retry）再切打野（id=1，胜利 +1%）。
-    打野也失败 → 停止（避免掉段刷狗牌，CC 段打野稳赢）。
+    打野失败 → 切回打人继续循环，直到拿满 3 狗牌或打满 max_fights 次
+    （不再"打野失败即停止"——2026-08-16 旧策略已废弃，用户指定
+     目标 = 3 狗牌或 20 次）。
     """
     # 当前模式: pvp(打人) / pve(打野)。开局先试打人。
     mode = "pvp"
@@ -600,7 +726,7 @@ def pk(max_fights=20, full=False):
         if not full and int(st["狗牌"]) >= 3:
             print("✅ 已拿满 3 狗牌，停止出击（--full 可打满）")
             break
-        # 模式决策: 打人失败/轮空 → 切打野; 打野失败 → 停止
+        # 模式决策: 打人失败/轮空 → 切打野; 打野失败 → 切回打人（循环到 3 狗牌/20 次）
         target = 2 if mode == "pvp" else 1
         kind, r = fight(target)
         target_name = "打人" if target == 2 else "打野"
@@ -619,8 +745,8 @@ def pk(max_fights=20, full=False):
                 print("  ↪ 打人失败，切打野")
                 mode = "pve"
             else:
-                print("  ⏹ 打野失败，停止出击（避免连败掉段）")
-                break
+                print("  ↪ 打野失败，切回打人（继续打到 3 狗牌/20 次）")
+                mode = "pvp"
             continue
         # win: 保持当前模式
         st = parse_pk()
@@ -683,6 +809,12 @@ def gift():
         r = click(8, id=s["pos"])
         txt = strip_tags(r)
         print(f"\n翻牌 #{s['pos']} ({s['name']}): {txt[:120]}")
+        # ⚠️ 拒翻判定先于结算判定：未拿满 3 狗牌时返回
+        # "请先在争夺战场拿到3枚狗牌，狗牌在PVP/PVE胜利获得"（含"获得"但非结算，
+        # 2026-08-17 实测踩坑）。结算文本才含"获得"。
+        if "狗牌" in txt and ("请先" in txt or "拿到" in txt or "胜利获得" in txt):
+            print("⏹ 需先拿满 3 狗牌才能翻牌，停止")
+            return
         if "获得" in txt:  # 结算成功
             print("🎉 结算完成！")
             return
@@ -699,17 +831,22 @@ def gift():
     print("翻牌区已全部翻开但未凑齐同色（异常情况）")
 
 
-def all_daily():
+def all_daily(no_refresh=False):
     """一键日常（按 05 §4A 顺序，逐步容错）：
     addpoint → gem(收菜+开工) → gemup → halo → wish → beach → pk → gift → bonus
+    no_refresh=True 时沙滩空不自动刷新（不耗随机装备箱，供保留装备箱场景）。
     """
     steps = [("加点", addpoint), ("工坊收菜", gem), ("宝石提升", gemup),
-             ("光环提升", halo), ("许愿池", wish), ("沙滩收取", beach),
+             ("光环提升", halo), ("许愿池", wish),
+             ("沙滩收取", lambda: beach(allow_refresh=not no_refresh,
+                                         wait_after_refresh=False)),
              ("出击打野", pk), ("翻牌", gift), ("额外奖励", bonus)]
     for name, fn in steps:
         print(f"\n{'=' * 20} [{name}] {'=' * 20}")
         try:
             fn()
+        except AuthExpiredError:
+            raise  # cookie 失效不继续（每步都会失败），直接抛出提示重抓
         except Exception as e:
             print(f"⚠️ [{name}] 出错: {e}，继续下一步")
     print("\n=== 今日日常完成 ===")
@@ -728,6 +865,7 @@ def stat():
 
 
 def main():
+    setup_logging()
     global SAFEID, USER, ZID
     USER, SAFEID = get_user_and_safeid()
     if not SAFEID or not USER:
@@ -748,7 +886,8 @@ def main():
     elif cmd == "wish":
         wish()
     elif cmd == "beach":
-        beach()
+        no_refresh = "--no-refresh" in sys.argv
+        beach(allow_refresh=not no_refresh, wait_after_refresh=not no_refresh)
     elif cmd == "refresh":
         beach_refresh()
     elif cmd == "smelt":
@@ -763,10 +902,14 @@ def main():
     elif cmd == "bonus":
         bonus()
     elif cmd == "all":
-        all_daily()
+        all_daily(no_refresh="--no-refresh" in sys.argv)
     else:
         stat()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AuthExpiredError as e:
+        print(f"\n❌ {e}")
+        sys.exit(1)
