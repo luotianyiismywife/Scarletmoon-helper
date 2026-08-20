@@ -7,7 +7,7 @@
     python tools/ggz_daily.py gem           # [1] 工坊收菜+开工（加工中→收工→自动重开）
     python tools/ggz_daily.py gemup         # [1.5] 提升宝石（B以下只升梦>红>银；比例低优先）
     python tools/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
-    python tools/ggz_daily.py wish          # [3] 许愿池（贝壳≥30w 且今日未许愿）
+    python tools/ggz_daily.py wish          # [3] 许愿池（按 WISH_MODE：combo 300w 十连送1=11次 / single 30w×N）
     python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新；--no-refresh 禁用自动刷新不耗箱）
     python tools/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
     python tools/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
@@ -99,6 +99,13 @@ COOKIE = load_cookie()
 USER = None   # 动态: 主页提取
 ZID = None    # 动态: f=8 出战中角色
 
+# ===== 许愿池策略配置（2026-08-20）=====
+# "combo"（默认）: 攒够 300 万贝壳 → c=18&id=10 十连（送 1 次 = 11 次）；<300 万不抽攒着
+# "plan"        : 合理规划（每天限一次许愿操作）：
+#                   ≥300 万 → 只做一次 10 连（11 次，最划算；600 万也只抽一次，剩的明天抽）
+#                   <300 万 → 按剩余贝壳抽 1-9 次（270 万 = 9 次；每天一次机会不浪费）
+WISH_MODE = "combo"
+
 # requests.Session：连接池 + keep-alive 复用连接，规避 urllib 每次新建 TLS
 # 握手被服务器限流（SSL 断开/返回空）的问题（2026-08-16 实测，05 文档 §4.5）
 _SESSION = requests.Session()
@@ -118,6 +125,11 @@ def request(url, data=None, retries=3, xhr=True):
     返回 JS 动态加载的内容（如装备页道具栏），静态请求拿不到（2026-08-13 实测）。
     返回 bytes（与旧 urllib 版本接口兼容，dec() 解码）。
     """
+    # 写操作（POST）前随机 sleep 0.3~1s 打散请求节奏（2026-08-19 学自
+    # guguzhen-slack：`await asyncio.sleep(random.random() * 1)`），
+    # 降低连续请求触发限流概率（f=1 读沙滩 0 字符限流事故的缓解手段之一）。
+    if data is not None:
+        time.sleep(random.uniform(0.3, 1.0))
     last_err = None
     for attempt in range(retries):
         try:
@@ -263,7 +275,15 @@ def gem():
 
 
 def wish():
-    """[3] 许愿池：f=19 判断今日是否已许愿 + 主页贝壳≥30w → c=18 许愿 1 次。"""
+    """[3] 许愿池：f=19 判断今日是否已许愿 + 主页贝壳 → 按 WISH_MODE 许愿。
+
+    WISH_MODE 配置（脚本顶部，2026-08-20）：
+      "combo"（默认）: 攒够 300 万 → c=18&id=10 十连（送 1 次 = 11 次）；<300 万不抽攒着
+      "plan"        : 合理规划（每天限一次许愿操作）：
+                       ≥300 万 → 只做一次 10 连（11 次，最划算；600 万也只抽一次，剩的明天抽）
+                       <300 万 → 按剩余贝壳抽 1-9 次（270 万 = 9 次）
+    单次许愿 30 万贝壳；10 连 = 300 万送 1 次（11 次，游戏内明示，02 文档 §4.5）。
+    """
     t = read_block(19)
     fields = t.strip().split("#")
     if len(fields) >= 3 and fields[2] != "0":
@@ -274,15 +294,33 @@ def wish():
     m = re.search(r"贝壳[^>]*>\s*(\d+)", home)
     coins = int(m.group(1)) if m else 0
     print(f"贝壳: {coins}")
-    if coins >= 300000:
-        r = click(18, id=1)
-        if "已经许愿" in r or "请明天" in r:
-            # 服务器权威判定已许愿（f=19 fields[2] 不可靠，2026-08-16 实测）
-            print("今日已许愿（服务器确认），跳过")
+
+    n = coins // 300000  # 按 30 万/次最多能抽的次数
+    if WISH_MODE == "plan":
+        # 合理规划：能 10 连就 10 连（最划算，每天限一次操作）；不能就按剩余抽 1-9 次
+        if n >= 10:
+            print(f"[plan] 贝壳≥300w，10 连许愿（送 1 = 11 次，花 300 万；剩 {coins - 3000000} 贝壳明天抽）")
+            r = click(18, id=10)
+        elif n >= 1:
+            print(f"[plan] 贝壳不足 300w，抽 {n} 次（花 {n * 300000} 贝壳）")
+            r = click(18, id=n)
         else:
-            show("c=18 许愿返回", r)
+            print("贝壳 < 30w，跳过许愿")
+            return
     else:
-        print("贝壳 < 30w，跳过许愿")
+        # combo（默认）：攒够 300 万才抽 10 连
+        if n >= 10:
+            print("[combo] 贝壳 ≥300w，10 连许愿（送 1 次 = 11 次）")
+            r = click(18, id=10)
+        else:
+            print("贝壳 < 300w，跳过许愿（combo 模式攒够 300w 一次 10 连）")
+            return
+
+    if "已经许愿" in r or "请明天" in r:
+        # 服务器权威判定已许愿（f=19 fields[2] 不可靠，2026-08-16 实测）
+        print("今日已许愿（服务器确认），跳过")
+    else:
+        show("c=18 许愿返回", r)
 
 
 def get_items():
@@ -539,9 +577,11 @@ def _read_beach(retries=3, interval=3):
             continue
         # 正常 HTML 但无装备按钮 → 沙滩真空
         return [], raw
-    # 重试耗尽
-    print(f"  ⚠️ f=1 重试 {retries} 次仍无法读取沙滩（最后返回 {len(last_raw)} 字符: {last_raw[:120]!r}）")
-    return [], last_raw
+    # 重试耗尽（2026-08-19 修复：docstring 承诺"抛异常而非静默跳过"，
+    # 旧实现却 return [] 与"沙滩真空"返回值混淆 → beach() 误判空跳过（今日事故）。
+    # 现在兑现承诺：抛异常，由调用方决定重试/报错，不再假装沙滩空。）
+    raise RuntimeError(f"f=1 读取沙滩失败：重试 {retries} 次仍返回异常内容"
+                       f"（最后 {len(last_raw)} 字符: {last_raw[:120]!r}），疑似限流/格式变化")
 
 
 def beach(allow_refresh=True, wait_after_refresh=True):
@@ -563,7 +603,12 @@ def beach(allow_refresh=True, wait_after_refresh=True):
       5. 限流：momozhen 对连续请求限流（返回空/SSL 断开），requests.Session 已缓解，
          但高频场景仍需间隔 ≥2s。
     """
-    items, raw = _read_beach()
+    try:
+        items, raw = _read_beach()
+    except RuntimeError as e:
+        print(f"  ❌ 沙滩读取失败: {e}")
+        print("  → 限流通常是暂时的，稍后重跑 beach 即可；若持续失败请检查 cookie")
+        return
     if not items:
         # 确认是真空（_read_beach 已排除限流/会话失效）
         # ⚠️ 沙滩空 → c=12 自动刷新（2026-08-16 实测改版）：
@@ -588,7 +633,10 @@ def beach(allow_refresh=True, wait_after_refresh=True):
         # 空窗期 ~64s：45 次 × 2s = 90s，覆盖空窗 + 限流重试
         for attempt in range(45):
             time.sleep(2)
-            items, raw = _read_beach(retries=1)  # 轮询中单次读取即可
+            try:
+                items, raw = _read_beach(retries=1)  # 轮询中单次读取即可
+            except RuntimeError:
+                continue  # 单次读取失败（限流）→ 继续轮询等恢复
             if items:
                 print(f"  刷新后第 {attempt + 1} 次（{(attempt + 1) * 2}s）读取到 {len(items)} 件装备")
                 break
@@ -835,6 +883,13 @@ def all_daily(no_refresh=False):
     """一键日常（按 05 §4A 顺序，逐步容错）：
     addpoint → gem(收菜+开工) → gemup → halo → wish → beach → pk → gift → bonus
     no_refresh=True 时沙滩空不自动刷新（不耗随机装备箱，供保留装备箱场景）。
+
+    ⚠️ 顺序已知问题（2026-08-20 记录，暂不改）：
+      halo（光环提升）在 gift（翻牌）之前执行，而光环天赋石(it310)的主要来源
+      是翻牌结算（3 同色必给 1 颗）→ 当天翻牌拿到的石头当天用不上，要等次日。
+      实测：08-20 halo 时读 0 颗跳过（翻牌还没跑），翻牌后仓库才有 1 颗。
+      后续可把 halo 挪到 gift 之后（gift → halo → bonus），让当天石头当天用。
+      用户决定顺序后面再调整，先在此留档。
     """
     steps = [("加点", addpoint), ("工坊收菜", gem), ("宝石提升", gemup),
              ("光环提升", halo), ("许愿池", wish),
