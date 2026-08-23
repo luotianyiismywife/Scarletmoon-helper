@@ -36,6 +36,16 @@
 - ❌ 误判陷阱：`login.php` 字符串在**已登录页面也大量存在**（退出链接 `login.php?action=quit&verify=...`），不能凭"页面含 login.php"判断未登录
 - **Cookie 提取注意**：`PHPSESSID` 是会话 Cookie 只存在浏览器内存，`cookies.sqlite` 里**没有**；但服务器每次请求会 Set-Cookie 新的 PHPSESSID，用 `requests.Session` 自动管理即可，无需手工拼
 
+### 有效期（2026-08-23 实测）
+- **`2ed4e_*` 持久 Cookie 有效期约 1 年**：服务器 Set-Cookie 的 `expires` 为登录日 +1 年（实测 `2026-08-23` → `2027-08-23`）；sqlite 中 expiry 亦在次年（约 2027-08）
+- **PHPSESSID 会话 Cookie 不落盘**：浏览器关闭/会话过期即失效；论坛每次请求自动 Set-Cookie 刷新
+- 注意：即使 `2ed4e_*` 未到 1 年，**改密码/论坛侧登出**会使旧 cookie 立即失效
+
+### ⚠️ UA 版本校验（2026-08-23 血泪教训）
+- PHPWind 论坛**校验 User-Agent 版本**：用旧版 UA（如 `rv:137.0`）请求会**强制登出**（302 → `login.php`），即使 cookie 完全正确
+- 浏览器实际发送的 UA 与当前 Firefox 版本一致（如 `rv:156.0`；Nightly 的 UA 版本号去 `a1` 后缀）
+- **脚本必须用与浏览器一致的 UA**；`tools/get_cookies.py` 已实现动态读取 `application.ini` 版本生成 UA，升级浏览器后无需改代码
+
 ### 请求头（Python 实测可用）
 ```
 User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0
@@ -151,7 +161,7 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
     <td><a href="read.php?tid=1083618&sf=267">新</a></td>  <!-- 新帖标记 -->
     <td><div class="threadtit1"><a href="read.php?tid=1083618&sf=267" title="完整标题">标题</a></div></td>
     <td><ul class="b_tit6"><li><a href="...">8<br><span>140</span></a></li></ul></td>  <!-- 8回复/140浏览 -->
-    <td><a href="profile.php?action=show&uid=768869" class="bl">yeybsghhz</a> | 21:10<br>最后回复者 | 23:43</td>
+    <td><a href="profile.php?action=show&uid=768869" class="bl">用户名</a> | 21:10<br>最后回复者 | 23:43</td>
   </tr>
   ```
 - **关键解析点**：标题取 `<a title="...">` 属性（非标签文本，文本可能是"新"标记）；回复数取 `b_tit6` 的 `<li>` 内第一个数字（后随浏览数）
@@ -314,7 +324,15 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
   ```
   - 流程：POST `login.php?`（PHPWind 表单 `pwuser`/`pwpwd`/`step=2`，**无验证码**）→ 登录成功 → 走入口链 `fyg_sjcdwj.php?go=play&xl=2` → 自动登录链 `fyg_login.php?m=li` → 游戏主页，服务器下发新 `fyg2019_*`（含新 `endtime`）
   - 账号密码从环境变量读，**不写代码/不入库**；适合 cookie 过期后刷新（游戏 cookie 约 1 天有效）
+- **`--refreshggz`：复用论坛 cookie 刷新咕咕镇（2026-08-23 新增，无需账号密码）**：
+  ```powershell
+  python tools/get_cookies.py --refreshggz
+  ```
+  - 流程：读 `cookie.txt` 的 `2ed4e_*` → 请求 `fyg_sjcdwj.php?go=play&xl=2`（302 时 Set-Cookie 下发新 `fyg2019_*`）→ 请求 `fyg_index.php` 验证（含"个人信息"即成功）
+  - **前提**：论坛登录态仍有效（`2ed4e_*` 约 1 年有效，见 §2 有效期）
+  - 实现要点（2026-08-23 血泪）：① **CookieJar 预加载 + 不手写 Cookie 头**——手动 `Cookie:` 头优先级高于 CookieJar，会覆盖 302 Set-Cookie 的新值，`fyg_index.php` 用旧 cookie 被拒（27 字节"请重新登录并刷新！"）；② **PHPSESSID 只留游戏域**——cookie.txt 单值不分域，写回论坛域 PHPSESSID 会让游戏请求会话失效；③ UA 动态生成（见 §2 UA 校验）
 - 咕咕镇游戏 Cookie：`fyg2019_gameuid/gamepw/endtime/logme`；PHPSESSID 为会话 Cookie 不落盘，由服务器首次请求自动补发
+- ⚠️ **单会话互顶**：`--refreshggz`/`--login` 刷新会顶掉浏览器里的游戏会话（咕咕镇单会话），刷新后浏览器游戏页变"请重新登录"属正常现象，别误以为 cookie 坏了
 - `cookies.sqlite` 路径：`%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\cookies.sqlite`
 - 表：`moz_cookies`（含 `originAttributes` 分区列，查询时按 host LIKE 过滤即可）
 

@@ -27,6 +27,8 @@ import sys
 import time
 import random
 import datetime
+import hashlib
+import html
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -53,6 +55,8 @@ class Tee:
 
     2026-08-17：PowerShell 偶发抽风会吞掉/截断脚本输出，
     加日志文件兜底（logs/ggz_YYYYMMDD.log）。
+    2026-08-23：写日志流前对 SECRETS 里的明文做 MD5 脱敏（终端显示原文，
+    日志文件可上传；logs/ 已取消 gitignore 入库）。
     """
 
     def __init__(self, *streams):
@@ -61,6 +65,9 @@ class Tee:
     def write(self, data):
         for s in self.streams:
             try:
+                if s not in (sys.__stdout__, sys.__stderr__):
+                    for plain, masked in SECRETS.items():
+                        data = data.replace(plain, masked)
                 s.write(data)
             except Exception:
                 pass
@@ -99,6 +106,24 @@ COOKIE = load_cookie()
 USER = None   # 动态: 主页提取
 ZID = None    # 动态: f=8 出战中角色
 
+# ===== 日志脱敏（2026-08-23）=====
+# logs/ 会被上传/入库，用户名与 safeid 是敏感字段。
+# 策略：终端显示明文（本地方便），日志文件写 MD5 脱敏值（可上传）。
+# 由 Tee 在写日志流前统一替换，全局生效，无需改各 print 处。
+SECRETS = {}  # {明文: MD5前8位}，main 里 get_user_and_safeid 后填充
+
+
+def mask_secret(s, length=8):
+    """MD5 脱敏：取前 length 位 hex。保证唯一性（同一值每次结果一致）且不可逆。"""
+    return hashlib.md5(s.encode("utf-8")).hexdigest()[:length] if s else s
+
+
+def add_secret(value):
+    """登记一个敏感字段，后续写日志自动脱敏。返回脱敏值。"""
+    if value and value not in SECRETS:
+        SECRETS[value] = mask_secret(value)
+    return SECRETS.get(value, value)
+
 # ===== 许愿池策略配置（2026-08-20）=====
 # "combo"（默认）: 攒够 300 万贝壳 → c=18&id=10 十连（送 1 次 = 11 次）；<300 万不抽攒着
 # "plan"        : 合理规划（每天限一次许愿操作）：
@@ -110,7 +135,7 @@ WISH_MODE = "combo"
 # 握手被服务器限流（SSL 断开/返回空）的问题（2026-08-16 实测，05 文档 §4.5）
 _SESSION = requests.Session()
 _SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
     "Referer": BASE + "/fyg_index.php",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9",
@@ -417,7 +442,9 @@ def halo():
         print("无光环天赋石，跳过提升光环")
         return
     # 读光环页当前光环值
-    halo_html = dec(request(BASE + "/fyg_equip.php?eid=5"))
+    # ⚠️ 2026-08-21 修复：光环内容由 JS AJAX 动态加载（eqbp(5) → fyg_read.php POST f=5），
+    #    静态 GET fyg_equip.php?eid=5 只返回页面外壳（无"天赋光环"文本）→ 旧代码显示 "?"。
+    halo_html = dec(request(BASE + "/fyg_read.php", data="f=5"))
     m = re.search(r"([\d.]+)%\s*天赋光环", halo_html)
     halo_v = m.group(1) if m else "?"
     print(f"当前光环: {halo_v}%")
@@ -430,68 +457,81 @@ def halo():
     print("提升光环完成")
 
 
-def parse_equips(html, want_id=False):
+def parse_equips(html_text, want_id=False):
     """解析装备按钮列表（f=1 沙滩 / f=6 身上通用）。
 
     每个装备按钮结构（2026-08-12 实测 f=6）：
       <button ... data-content="<p class='fyg_xlxxXXX'>词条名 +N<span class='pull-right bg-*'>&nbsp;150%&nbsp;</span></p>..."
               title="Lv.<span>100</span> 装备名" ...><img src="ys/icon/z2101_4.gif">...
     沙滩版额外含 zbtip('ID','4')。
-    返回 [{icon, quality, name, level, total, mystery, bid, n_affix, has_orange, has_red, has_high}]
+    返回 [{icon, quality, name, level, total, mystery, bid, n_affix,
+           has_orange, has_red, has_high, affixes}]
       icon: 部位码 zXXXX；quality: 品质数字；total: 词条总值(% 之和)；bid: 沙滩拾取 id
       has_orange/has_red: 橙/红词条；has_high: 含高价值词条
+      affixes: 词条明细 [{name, text, pct, color}]（2026-08-23 新增，供装备记录）
     """
     HIGH_AFFIX = ["生命偷取", "附加物伤", "附加魔伤", "附加物穿", "附加魔穿",
                   "技能概率", "暴击概率", "攻击速度"]
     result = []
-    for btn in re.findall(r"<button[^>]*>.*?</button>", html, re.S):
-        if "ys/icon/z" not in btn:
+    for btn_raw in re.findall(r"<button[^>]*>.*?</button>", html_text, re.S):
+        if "ys/icon/z" not in btn_raw:
             continue
+        # ⚠️ 兼容 HTML 实体转义：fyg_beach.php 页面内 data-content 是转义版
+        # (&lt;p class=...&gt;)，f=1 接口返回未转义原生 HTML（2026-08-23 实测）
+        btn = html.unescape(btn_raw)
         # icon: background-image:url(ys/icon/z/z2402_2.gif)（品质后缀 _2）
         # ⚠️ 真实路径 icon/ 后带一层 z/ 子目录（2026-08-14 实测）；(?:/z)? 兼容新旧两种写法
         m = re.search(r"ys/icon/z(?:/z)?(\d{4})(?:_(\d))?\.gif", btn)
         icon, quality = (m.group(1), int(m.group(2)) if m and m.group(2) else 0) if m else ("", 0)
         # title: Lv.<span>100</span> <span>星级</span><br>装备名（f=1 沙滩）
         #       Lv.<span class='fyg_f18'>100</span> 装备名（f=6 身上，无 <br>，2026-08-16 实测）
-        m = re.search(r'title="Lv\.<span[^>]*>(\d+)</span>[\s\S]*?(?:<br|</span>)([^"<]*?)(?:"|$)', btn)
+        # ⚠️ 新版沙滩按钮 title 为空、名字在 data-original-title（2026-08-23 实测）
+        name = level = "?"
+        m = re.search(r'(?:title|data-original-title)="Lv\.<span[^>]*>(\d+)</span>[\s\S]*?(?:<br|</span>)([^"<]*?)(?:"|$)', btn)
         if m:
             level, name = m.group(1), m.group(2).strip()
         else:
-            # f=6 身上: title="Lv.<span class='fyg_f18'>100</span> 探险者之剑"
+            # 旧 f=6 身上: title="Lv.<span class='fyg_f18'>100</span> 探险者之剑"
             m2 = re.search(r'</span>\s*([^"<]+?)"', btn)
-            level, name = ("?", m2.group(1).strip()) if m2 else ("?", "?")
+            if m2:
+                level, name = "?", m2.group(1).strip()
         total = 0.0
-        # 词条颜色统计（2026-08-13 实测 class：danger=红 warning=橙 info=蓝 primary=紫 success=绿）
+        # 词条颜色（2026-08-13 实测 class：danger=红 warning=橙 info=蓝 primary=紫 success=绿）
         has_orange = False
         has_red = False
         has_high = False
         n_affix = 0
-        # 每词条: <p class='fyg_xlxxXXX'>名称 +N<span class='pull-right bg-XXX'>&nbsp;N%&nbsp;</span></p>
-        for m in re.finditer(r"<p class='fyg_xlxx\w+'>(.*?)</p>", btn, re.S):
-            affix_html = m.group(1)
-            # 词条名称: <p> 后到 <span 前的文本（如 "附加物伤 +1290"）
-            name_m = re.match(r"\s*([^<\s]+)", affix_html)
-            affix_name = name_m.group(1) if name_m else ""
-            # 百分比
-            val_m = re.search(r"pull-right (bg-\w+)[^>]*>(?:&nbsp;|\s)*(\d+(?:\.\d+)?)%", affix_html)
+        affixes = []  # 词条明细 [{name, text, pct, color}]
+        # 每词条: <p class='fyg_xlxxXXX'>词条名 +N<span class='pull-right bg-XXX'>&nbsp;N%&nbsp;</span></p>
+        for m in re.finditer(r"<p class='fyg_xlxx(\w+)'>(.*?)</p>", btn, re.S):
+            color_cls, affix_html = m.group(1), m.group(2)
+            # 词条名+数值文本: <p> 内 <span 前部分（如 "物理攻击 +64.4%" / "附加魔穿 +146"）
+            text_m = re.match(r"\s*(.*?)<span", affix_html, re.S)
+            affix_text = text_m.group(1).strip() if text_m else ""
+            name_m = re.match(r"\s*([^<+\s]+)", affix_text)
+            affix_name = name_m.group(1) if name_m else affix_text
+            # 评分百分比: pull-right bg-XXX>...NN%（词条总值评分，非词条自身数值）
+            val_m = re.search(r"pull-right bg-(\w+)[^>]*>(?:&nbsp;|\s)*(\d+(?:\.\d+)?)%", affix_html)
             if not val_m:
                 continue
-            color, val = val_m.group(1), float(val_m.group(2))
-            total += val
+            color, pct = val_m.group(1), float(val_m.group(2))
+            total += pct
             n_affix += 1
-            if color == "bg-warning":
+            if color == "warning":
                 has_orange = True
-            elif color == "bg-danger":
+            elif color == "danger":
                 has_red = True
             if any(kw in affix_name for kw in HIGH_AFFIX):
                 has_high = True
+            affixes.append({"name": affix_name, "text": affix_text,
+                            "pct": pct, "color": color})
         mystery = "[神秘属性]" in btn or "神秘属性" in btn
         m = re.search(r"zbtip\('(\d+)','4'\)", btn)
         bid = m.group(1) if m else None
         result.append({"icon": icon, "quality": quality, "name": name,
                        "level": level, "total": total, "mystery": mystery, "bid": bid,
                        "n_affix": n_affix, "has_orange": has_orange, "has_red": has_red,
-                       "has_high": has_high})
+                       "has_high": has_high, "affixes": affixes})
     return result
 
 
@@ -546,7 +586,9 @@ def _read_beach(retries=3, interval=3):
       现在先验证返回内容有效性，无效则重试；重试仍失败则抛异常而非静默跳过。
 
     验证规则：
-      - 返回 <20 字符 → 大概率空响应/限流，重试
+      - 返回 <20 字符 → 先用 f=6 探测接口健康度（2026-08-23：f=1 空沙滩
+        本身就返回空字符串，与限流同形，必须用 f=6 区分）：
+          f=6 也空 → 限流，重试；f=6 正常 → 沙滩真空
       - 含"请重新登录"/"登录" → 会话失效，直接报错（重试无意义）
       - 含 "<button" 但 parse_equips 解析 0 件 → HTML 格式变化，报警但继续
       - 返回正常 HTML 且无 button → 沙滩真空
@@ -561,11 +603,19 @@ def _read_beach(retries=3, interval=3):
                 f"沙滩读取失败：会话已失效（f=1 返回 {len(raw)} 字符: {raw[:80]!r}）。\n"
                 "→ 请运行 py tools/get_cookies.py --game 刷新 cookie.txt"
             )
-        # 空响应/极短返回：大概率限流，等待后重试
+        # 空响应/极短返回：⚠️ 2026-08-23 修复——f=1 空沙滩本身返回空字符串，
+        # 不能直接当"限流"。用 f=6（身上装备）探测接口健康度：
+        #   - f=6 也空 → 真限流，等待后重试
+        #   - f=6 正常 → 沙滩真空（f=1 空 = 文档明确"空沙滩返回空字符串"）
         if len(raw) < 20:
-            print(f"  ⚠️ f=1 返回异常短（{len(raw)} 字符），疑似限流，{interval}s 后重试 ({attempt+1}/{retries})")
-            time.sleep(interval)
-            continue
+            probe = read_block(6)
+            if len(probe) < 20:
+                print(f"  ⚠️ f=1 返回异常短（{len(raw)} 字符）且 f=6 也空，疑似限流，"
+                      f"{interval}s 后重试 ({attempt+1}/{retries})")
+                time.sleep(interval)
+                continue
+            # f=6 正常 → 确认沙滩真空
+            return [], raw
         # 有效 HTML：尝试解析
         items = parse_equips(raw, want_id=True)
         if items:
@@ -654,7 +704,14 @@ def beach(allow_refresh=True, wait_after_refresh=True):
         if it["mystery"]:
             mark.append("神秘")
         mark_str = f" 词条[{'/'.join(mark)}]" if mark else ""
-        print(f"  {it['name']} {it['quality']}等 {it['total']:.0f}% icon={it['icon']} id={it['bid']}{mark_str}")
+        print(f"  >{it['name']} {it['quality']}等 {it['total']:.0f}% icon={it['icon']} id={it['bid']}{mark_str}")
+        # 词条明细（2026-08-23 新增：装备记录用）
+        for a in it["affixes"]:
+            color_cn = {"danger": "红", "warning": "橙", "info": "蓝",
+                        "primary": "紫", "success": "绿"}.get(a["color"], a["color"])
+            print(f"      {a['text']}  [评分{a['pct']:.0f}% 词条{color_cn}]")
+        if not it["affixes"]:
+            print(f"      （无词条明细）")
 
     take_ids, clear_count = [], 0
     for it in items:
@@ -927,6 +984,9 @@ def main():
         print("无法获取登录信息（用户名/safeid），请确认 cookie 有效")
         sys.exit(1)
     ZID = get_active_zid()
+    # 登记敏感字段 → Tee 写日志时自动替换为 MD5（终端显示明文，日志文件脱敏可上传）
+    add_secret(USER)
+    add_secret(SAFEID)
     print(f"[用户={USER} safeid={SAFEID} 出战角色zid={ZID}]")
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else "stat"

@@ -1,7 +1,7 @@
 # Firefox Nightly 浏览器调试文档
 
 > 用途：记录用 Firefox Nightly + firefox-devtools-mcp 调试咕咕镇/论坛接口的完整流程与注意事项。
-> 最后更新：2026-08-14
+> 最后更新：2026-08-23
 
 ---
 
@@ -76,19 +76,25 @@
 
 ## 3. 启动 Firefox Nightly（重要！）
 
-### 3.1 正确启动命令
+### 3.1 正确启动命令（默认：用户手动选 profile）⭐
+
+**每次启动都必须弹窗让用户手动选 profile**（不写死 profile 参数），避免启动到错误 profile 导致登录态/cookie 对不上：
 
 ```powershell
-Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList @("--marionette", "--remote-debugging-port", "9222")
+Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList @("--marionette", "--remote-debugging-port", "9222", "-P")
 ```
 
-**两个标志缺一不可**：
+**三个标志缺一不可**：
 - `--marionette` → 启用 Marionette 协议（MCP 需要）
 - `--remote-debugging-port 9222` → 启用 BiDi WebSocket 端点
+- `-P` → 弹出"选择用户配置文件"窗口，**用户手动点选**要用的 profile（如 `default-nightly`）
 
 > 如果只加 `--marionette` 不加 `--remote-debugging-port`，MCP 会报：
 > `session has no WebDriver BiDi endpoint (missing webSocketUrl capability)`
 > 解决：两个都加后重启。
+>
+> ⚠️ `-P` 弹窗时带 `--marionette`/`--remote-debugging-port` 参数可能不生效（窗口本身是另一个进程）。
+> 稳妥做法：先弹窗选好 profile，确认启动后若端口没起来，再带参数重启一次（仍带 `-P` 让用户选）。
 
 ### 3.2 启动后自检
 
@@ -130,9 +136,9 @@ MCP 是 `--connect-existing` 模式，连不上已运行实例就会报错。
 2. 确认 2828/9222 端口在监听
 3. 再调用 MCP 工具
 
-### 4.3 用哪个 profile 启动
+### 4.3 用哪个 profile 启动（默认：用户手动选）
 
-#### 方式一：弹窗口让用户选择 profile（推荐）⭐
+#### 唯一推荐方式：弹窗口让用户手动选 profile ⭐
 
 用 `-P`（Profile Manager）参数启动，会**弹出"选择用户配置文件"窗口**，列出所有 profile 让用户手动点选：
 
@@ -141,32 +147,15 @@ Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" `
   -ArgumentList @("--marionette", "--remote-debugging-port", "9222", "-P")
 ```
 
+- **每次启动都用这个方式**，不写死 profile 名，由用户手动确认用哪个 profile（避免启动错 profile 造成 cookie/登录态错乱）
 - 窗口列表来自 `%APPDATA%\Mozilla\Firefox\profiles.ini`（见第 1 节表）
 - 选中哪个，就用哪个 profile 的 cookie/登录态启动
 - 等价写法：`-ProfileManager`、`--profile-manager`
-- 也可以 `-P <ProfileName>`（如 `-P default-nightly`）**跳过窗口直接用指定名字**的 profile 启动
 
-> ⚠️ 注意：`-P` 弹窗时带 `--marionette`/`--remote-debugging-port` 参数**可能不生效**——因为窗口本身是另一个进程。稳妥做法：先弹出选择窗口选好 profile，确认启动后，如果端口没起来，再重新带参数启动一次。
+> ⚠️ 注意：`-P` 弹窗时带 `--marionette`/`--remote-debugging-port` 参数**可能不生效**——因为窗口本身是另一个进程。稳妥做法：先弹出选择窗口选好 profile，确认启动后，如果端口没起来，再重新带参数启动一次（仍带 `-P`）。
 
-#### 方式二：命令行直接指定 profile 目录（无窗口）
-```powershell
-Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" `
-  -ArgumentList @("--marionette", "--remote-debugging-port", "9222", "-profile", "$env:APPDATA\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly")
-```
-
-#### 方式三：MCP 工具 `restart_firefox`（无窗口）
-MCP 内置工具 `mcp__mozilla_fire_restart_firefox` 支持指定 profile：
-
-| 参数 | 说明 | 示例 |
-|---|---|---|
-| `profilePath` | 要使用的 profile 目录 | `%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly` |
-| `firefoxPath` | 浏览器二进制路径 | `C:\Program Files\Firefox Nightly\firefox.exe` |
-| `startUrl` | 重启后打开的 URL | `https://www.momozhen.com/` |
-| `headless` | 无头模式 | `false` |
-
-> ⚠️ `restart_firefox` 会**关闭所有当前标签页**再重启，用前确认没有未保存状态。
-
-**不带参数调用** = 保持当前 binary/profile 配置重启（等价于刷干净重来）。
+> 不建议：`-P <ProfileName>` 直接指定名字跳过窗口（可能选错 profile 而无人察觉）。
+> 不建议：命令行 `-profile <路径>` / MCP `restart_firefox` 无窗口启动（无法确认实际用的 profile）。
 
 ### 4.4 标准版与 Nightly 是不同 profile
 
@@ -185,15 +174,15 @@ MCP 内置工具 `mcp__mozilla_fire_restart_firefox` 支持指定 profile：
 
 ```mermaid
 flowchart TD
-    A[启动 Nightly<br/>--marionette + --remote-debugging-port] --> B[自检端口 2828/9222]
-    B --> C[调用 MCP 工具<br/>list_pages / navigate / snapshot]
-    C --> D[选 profile<br/>restart_firefox + profilePath]
+    A[启动 Nightly<br/>-P 弹窗选 profile<br/>+ --marionette + --remote-debugging-port] --> B[用户手动点选 profile]
+    B --> C[自检端口 2828/9222]
+    C --> D[调用 MCP 工具<br/>list_pages / navigate / snapshot]
     D --> E[登录态检查<br/>访问 momozhen.com 看用户名]
     E --> F[抓接口<br/>evaluate_script / 手动操作]
 ```
 
-1. **启动**：`Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList @("--marionette","--remote-debugging-port","9222")`
-2. **选 profile**（弹窗口）：加 `-P` 参数启动 → 弹出"选择用户配置文件"窗口 → 手动点选 `default-nightly`（含咕咕镇登录态）
+1. **启动**（每次都用）：`Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList @("--marionette","--remote-debugging-port","9222","-P")` → **用户手动点选 profile**（如 `default-nightly` 含咕咕镇登录态）
+2. **自检端口**：确认 2828/9222 在监听（若 `-P` 弹窗导致参数没生效，端口没起来 → 重新带参数启动一次，仍带 `-P`）
 3. **确认登录态**：`mcp__mozilla_fire_list_pages` → 打开 `https://www.momozhen.com/`，页面应显示用户名 `<用户名>`
 4. **抓接口**：用 `evaluate_script` 发 fetch 请求，或手动点按钮 + 看网络面板
 

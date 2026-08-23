@@ -6,6 +6,7 @@
     python tools/get_cookies.py --forum            # 仅论坛 bbs.kfpromax.com
     python tools/get_cookies.py --game             # 仅咕咕镇 www.momozhen.com
     python tools/get_cookies.py --login            # 账号密码登录论坛并刷新 cookie
+    python tools/get_cookies.py --refreshggz       # 用现有论坛 cookie 走入口链刷新咕咕镇 cookie
 
 输出:
     cookie.txt (项目根目录, 已 gitignore) —— 一行 "name=value; name=value" 格式,
@@ -21,6 +22,12 @@
     - --login 模式：通过论坛账号密码模拟登录（PHPWind 登录表单, 无验证码）,
       登录后自动走入口跳转链, 让服务器下发新的游戏 Cookie（含新 endtime）。
       账号密码从环境变量 KF_USER / KF_PASS 读取（不写入代码与文件）。
+    - --refreshggz 模式：读 cookie.txt 现有论坛 Cookie（2ed4e_*）走入口链刷新游戏
+      Cookie，无需账号密码；论坛登录态仍有效即可。若论坛 Cookie 也失效，入口链
+      不会下发有效 endtime（与当前时间几乎相同），会报错提示先重新登录。
+    - ⚠️ UA 必须与浏览器当前版本一致：PHPWind 论坛会校验 UA，用旧版 rv:137.0
+      请求会被强制登出（重定向 login.php）。本脚本动态读取 Firefox Nightly
+      application.ini 的版本号生成 UA，升级浏览器后无需改代码。
 """
 import os
 import re
@@ -29,14 +36,51 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from http.cookiejar import CookieJar
+from http.cookiejar import Cookie, CookieJar
 
 PROFILE = "30hfbhjk.default-nightly"
 OUTPUT = os.path.join(os.path.dirname(__file__), "..", "cookie.txt")
 
 FORUM_BASE = "https://bbs.kfpromax.com"
 GAME_BASE = "https://www.momozhen.com"
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0"
+FORUM_DOMAIN = "bbs.kfpromax.com"
+GAME_DOMAIN = "www.momozhen.com"
+UA_FALLBACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+
+
+def _current_ua():
+    """动态读取 Firefox Nightly 实际版本生成 UA。
+
+    2026-08-23 血泪教训：UA 写死 rv:137.0 导致 PHPWind 论坛强制登出
+    （重定向 login.php），入口链刷新游戏 cookie 全部失败；浏览器实际
+    发送 rv:156.0 就正常。PHPWind 会校验 UA 版本，必须与浏览器一致。
+
+    注意：Firefox 发送的 UA 版本是"规范化"的——application.ini 里
+    Version=156.0a1，但浏览器实际发 rv:156.0（去掉 a1/b1 等后缀）。
+    """
+    try:
+        import configparser
+        import re
+        candidates = [
+            os.path.join(os.environ.get("ProgramFiles", ""), "Firefox Nightly", "application.ini"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Firefox Nightly", "application.ini"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Firefox Nightly", "application.ini"),
+        ]
+        for ini in candidates:
+            if ini and os.path.exists(ini):
+                cp = configparser.ConfigParser()
+                cp.read(ini, encoding="utf-8")
+                ver = cp.get("App", "Version", fallback="")
+                ver = re.sub(r"[a-zA-Z].*$", "", ver)  # 156.0a1 → 156.0
+                if ver:
+                    return (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{ver}) "
+                            f"Gecko/20100101 Firefox/{ver}")
+    except Exception:
+        pass
+    return UA_FALLBACK
+
+
+UA = _current_ua()
 
 # 域名关键字 -> 说明
 DOMAINS = {
@@ -169,9 +213,139 @@ def load_existing():
     return result
 
 
+def _seed_jar(jar, cookies):
+    """把 cookie.txt 的 (name, value) 按域预加载进 CookieJar。
+
+    2026-08-23 修复：refresh_ggz 原实现在 http() 里每次都手动带
+    `Cookie: cookie.txt` 头，urllib 中手动 Cookie 头优先级高于
+    CookieJar，导致入口链 302 响应 Set-Cookie 的**新 fyg2019_***
+    （会话刷新值）被旧值覆盖——fyg_index.php 用旧 cookie 请求被拒
+    （"请重新登录并刷新！"）。预加载后由 jar 统一管理，重定向
+    Set-Cookie 自动生效，与浏览器行为一致。
+    """
+    for name, value in cookies:
+        domain = FORUM_DOMAIN if name.startswith("2ed4e_") else GAME_DOMAIN
+        c = Cookie(version=0, name=name, value=value,
+                   port=None, port_specified=False,
+                   domain=domain, domain_specified=True, domain_initial_dot=False,
+                   path="/", path_specified=True, secure=True, expires=None,
+                   discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+        jar.set_cookie(c)
+
+
+def refresh_ggz_via_forum():
+    """用现有论坛 cookie（cookie.txt 的 2ed4e_*）走入口链刷新咕咕镇游戏 cookie。
+
+    适用：论坛登录态有效但游戏会话失效时，无需重新输入账号密码，
+    直接复用论坛 cookie 走入口链，让服务器刷新游戏会话并下发新
+    fyg2019_* cookie。
+
+    机制（2026-08-23 实测）：
+      入口链 fyg_sjcdwj.php 302 → next.php 时，服务器 Set-Cookie
+      新的 fyg2019_*（刷新会话）；随后 fyg_index.php 必须带这批
+      新 cookie + 有效 PHPSESSID 才能登录成功。旧 cookie（cookie.txt
+      里存的）会被拒（"请重新登录并刷新！"），endtime 本身≈当前
+      时间并非有效/失效标志。
+
+    返回新下发的 (name, value) cookie 列表（已合并写回 cookie.txt）。
+    """
+    existing = dict(load_existing())
+    if not any(k.startswith("2ed4e_") for k in existing):
+        print("[错误] cookie.txt 中没有论坛 cookie（2ed4e_*），请先 --login 或浏览器提取")
+        sys.exit(1)
+
+    jar = CookieJar()
+    _seed_jar(jar, existing.items())
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+    def http(url, data=None, referer=None, retries=3):
+        # ⚠️ 不手动带 Cookie 头：CookieJar 已预加载 + 自动吸收重定向 Set-Cookie
+        headers = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                   "Accept-Language": "zh-CN,zh;q=0.9"}
+        if referer:
+            headers["Referer"] = referer
+        if data is not None:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(url, data=data, headers=headers)
+                resp = opener.open(req, timeout=20)
+                return resp.geturl(), resp.read()
+            except Exception as e:
+                print(f"  重试 {attempt + 1}/{retries}: {e}")
+                time.sleep(2)
+        return None, None
+
+    # 1. 验证论坛登录态（PHPWind 已登录页通常含"退出"链接）
+    url, body = http(FORUM_BASE + "/index.php")
+    text = body.decode("gbk", errors="replace") if body else ""
+    if not body or ("退出" not in text and "logout" not in text.lower()):
+        print(f"[警告] 论坛登录态可能已失效（页面 {len(body or b'')} 字节，未检测到已登录标识）")
+        print("        仍尝试走入口链，但大概率下发无效 endtime")
+    else:
+        print(f"[1] 论坛登录态有效（{len(body)} 字节）")
+
+    # 2. 走入口链刷新游戏 cookie
+    print("[2] 走入口链刷新咕咕镇 cookie ...")
+    time.sleep(1)
+    url2, body2 = http(FORUM_BASE + "/fyg_sjcdwj.php?go=play&xl=2", referer=FORUM_BASE + "/index.php")
+    if body2:
+        # 若跳到 fyg_login.php?m=li 自动登录链
+        if url2 and "fyg_login" in url2:
+            time.sleep(1)
+            url2, body2 = http(url2, referer=FORUM_BASE + "/fyg_sjcdwj.php?go=play&xl=2")
+        # meta refresh 跳转
+        if body2 and b"url=" in body2.lower():
+            m = re.search(rb"url=([^\"']+)", body2)
+            if m:
+                time.sleep(1)
+                url2, body2 = http(m.group(1).decode(), referer=url2 or GAME_BASE + "/")
+    time.sleep(1)
+    url3, body3 = http(GAME_BASE + "/fyg_index.php", referer=url2 or GAME_BASE + "/")
+    logged = bool(body3) and ("个人信息".encode("utf-8") in body3)
+    if body3:
+        print(f"[3] 游戏主页: ({len(body3)} 字节) 刷新{'成功' if logged else '可能失败'}")
+
+    # 3. 收集新下发的游戏 cookie（PHPSESSID 只留游戏域，cookie.txt 单值不分域，
+    #    写回论坛域 PHPSESSID 会让后续游戏请求会话失效）
+    new_cookies = [(c.name, c.value) for c in jar
+                   if c.name.startswith("fyg2019_")
+                   or (c.name == "PHPSESSID" and c.domain == GAME_DOMAIN)]
+    print(f"[4] 新下发 {len(new_cookies)} 个: {[n for n, _ in new_cookies]}")
+
+    # 4. 以 fyg_index.php 是否返回个人信息为成功标志（2026-08-23 实测：
+    #    endtime 值≈当前时间并非失败标志，服务器会话状态在 PHPSESSID 里，
+    #    端到端请求成功才是硬指标）
+    if not logged:
+        print("[错误] 游戏主页未返回个人信息（论坛会话可能已失效/入口链被拒），"
+              "请先在浏览器登录论坛后重试 --login 或浏览器提取")
+        sys.exit(1)
+    et = dict(new_cookies).get("fyg2019_endtime")
+    if et:
+        try:
+            et_i = int(et)
+        except ValueError:
+            et_i = 0
+        print(f"[5] 新 endtime: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(et_i))}")
+    else:
+        print("[警告] 未拿到新 fyg2019_endtime")
+
+    # 5. 合并写回
+    merged = dict(existing)
+    merged.update(new_cookies)
+    out = "; ".join(f"{k}={v}" for k, v in merged.items())
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        f.write(out)
+    print(f"[完成] 共更新 {len(new_cookies)} 个 Cookie（合并后共 {len(merged)} 个），"
+          f"已写入 {os.path.normpath(OUTPUT)}")
+    return new_cookies
+
+
 def main():
     if "--login" in sys.argv:
         cookies = login_and_refresh()
+    elif "--refreshggz" in sys.argv:
+        cookies = refresh_ggz_via_forum()
     else:
         select = {"forum", "game"}
         if "--forum" in sys.argv:
