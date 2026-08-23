@@ -661,11 +661,13 @@ def beach(allow_refresh=True, wait_after_refresh=True):
         return
     if not items:
         # 确认是真空（_read_beach 已排除限流/会话失效）
-        # ⚠️ 沙滩空 → c=12 自动刷新（2026-08-16 实测改版）：
-        # c=12 后 f=1 空窗期实测仅 ~64 秒（探针 2s 轮询：+64s 读到 10 件），
-        # 旧代码 12 秒重试窗口不够 → 误判"读不到"。重试窗口改为 45×2s=90s 覆盖。
-        # （2026-08-14 曾误判空窗几秒→无效修复；08-16 又误判 10 分钟→过度禁止，
-        #   本次探针实测纠正：64 秒即可。）
+        # ⚠️ 沙滩空 → c=12 自动刷新（2026-08-16 实测改版）。
+        # ⚠️ 2026-08-23 实测纠正空窗期：c=12 后 f=1 空窗期仅 ~15-21 秒
+        #   （探针 +11s 空 / +21s 读到 10 件），非旧记录"64 秒"，更非 90s。
+        #   旧代码 45×2s=90s 密集轮询反而触发 f=1 专属限流（实测：连续读后
+        #   f=6/2/12 正常但 f=1 空，浏览器同 IP 也空）→ 全程读不到。
+        #   ✅ 新策略（浏览器行为一致）：c=12 后先等 15s 空窗期 → 读 1 次；
+        #      失败则 10s 间隔重试（最多 4 次覆盖 15-55s），低频率不触发限流。
         boxes = get_items().get("it004", 0)
         print(f"沙滩空，无装备（随机装备箱持有 {boxes}）")
         if allow_refresh and boxes > 0:
@@ -680,18 +682,21 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             return
         else:
             print("→ 刚刷新过（allow_refresh=False），等待空窗期过去...")
-        # 空窗期 ~64s：45 次 × 2s = 90s，覆盖空窗 + 限流重试
-        for attempt in range(45):
-            time.sleep(2)
+        # 空窗期 ~15-21s：先等 15s → 读 1 次 → 失败 10s 间隔重试（覆盖 15-55s）
+        time.sleep(15)
+        for attempt in range(4):
             try:
-                items, raw = _read_beach(retries=1)  # 轮询中单次读取即可
+                items, raw = _read_beach(retries=1)  # 单次读取
             except RuntimeError:
-                continue  # 单次读取失败（限流）→ 继续轮询等恢复
+                items = []
             if items:
-                print(f"  刷新后第 {attempt + 1} 次（{(attempt + 1) * 2}s）读取到 {len(items)} 件装备")
+                print(f"  ✅ 刷新后第 {attempt + 1} 次（{15 + attempt * 10}s）读取到 {len(items)} 件装备")
                 break
+            if attempt < 3:
+                print(f"  ⏳ 刷新后 {15 + (attempt + 1) * 10}s 仍空，10s 后重试...")
+                time.sleep(10)
         else:
-            print("  ⚠️ 刷新后 90s 仍未读到装备（可能服务器延迟/限流，可稍后重跑 beach）")
+            print("  ⚠️ 刷新后 55s 仍未读到装备（可能服务器延迟，可稍后重跑 beach）")
             return
     worn = parse_equips(read_block(6))
     print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
