@@ -17,5 +17,7 @@ tools/cookie.txt
 #    tools/ggz/ggz_daily.py 的 Tee 写日志时自动替换；历史日志已批量脱敏。
 # （原 logs/ 整目录忽略已移除，改为入库跟踪）
 
-# Python ����
+# Python 缓存
+__pycache__/
+*.pyc ����
 tools/__pycache__/
