@@ -39,7 +39,7 @@ import urllib.request
 from http.cookiejar import Cookie, CookieJar
 
 PROFILE = "30hfbhjk.default-nightly"
-OUTPUT = os.path.join(os.path.dirname(__file__), "..", "cookie.txt")
+OUTPUT = os.path.join(os.path.dirname(__file__), "cookie.txt")
 
 FORUM_BASE = "https://bbs.kfpromax.com"
 GAME_BASE = "https://www.momozhen.com"
@@ -339,6 +339,64 @@ def refresh_ggz_via_forum():
     print(f"[完成] 共更新 {len(new_cookies)} 个 Cookie（合并后共 {len(merged)} 个），"
           f"已写入 {os.path.normpath(OUTPUT)}")
     return new_cookies
+
+
+def is_firefox_running():
+    """检测 Firefox Nightly 是否在运行（Windows：查进程路径含 'Firefox Nightly'）。
+
+    用于 smart_refresh_ggz 决定从 sqlite 提取还是走入口链刷新。
+    """
+    try:
+        import subprocess
+        # wmic 比 Get-Process 快且不依赖 PowerShell；按路径过滤只匹配 Nightly
+        r = subprocess.run(
+            ["wmic", "process", "where", "name='firefox.exe'", "get", "ExecutablePath"],
+            capture_output=True, text=True, timeout=10)
+        return "Firefox Nightly" in r.stdout
+    except Exception:
+        return False  # 检测失败按"未运行"处理，走入口链刷新（更稳妥）
+
+
+def smart_refresh_ggz():
+    """智能刷新咕咕镇 cookie（供 ggz_daily.py / warehouse_tidy.py 自动调用）。
+
+    逻辑闭环（2026-08-24 用户设计）：
+      1. Firefox Nightly 运行中 → 从 cookies.sqlite 提取游戏 cookie（--game 逻辑）
+         （浏览器有最新登录态，直接读最准）
+      2. Firefox Nightly 未运行 → 用 cookie.txt 现有论坛 cookie 走入口链刷新
+         （--refreshggz 逻辑，不依赖浏览器）
+
+    返回 True 表示刷新成功（cookie.txt 已更新），False 表示失败。
+    调用方刷新成功后应重新 load_cookie() 并重试请求。
+    """
+    print("[cookie 失效] 自动刷新咕咕镇 cookie ...")
+    if is_firefox_running():
+        print("  → 检测到 Firefox Nightly 运行中，从 cookies.sqlite 提取")
+        try:
+            cookies = extract_from_firefox({"game"})
+        except SystemExit:
+            return False
+    else:
+        print("  → Firefox Nightly 未运行，走入口链刷新（--refreshggz 逻辑）")
+        try:
+            cookies = refresh_ggz_via_forum()
+        except SystemExit:
+            return False
+
+    if not cookies:
+        print("  ❌ 刷新失败：未获取到任何 cookie")
+        return False
+
+    # 合并写入 cookie.txt（extract_from_firefox / refresh_ggz_via_forum 只返回列表，
+    # 写文件逻辑在 main() 里，smart_refresh_ggz 必须自己写，否则 cookie.txt 不更新
+    # → 调用方 load_cookie() 读到的还是旧 cookie，白刷新）
+    merged = dict(load_existing())
+    merged.update(cookies)
+    cookie_str = "; ".join(f"{name}={value}" for name, value in merged.items())
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        f.write(cookie_str)
+    print(f"  ✅ 刷新成功，{len(cookies)} 个 cookie 已合并写入 cookie.txt（共 {len(merged)} 个）")
+    return True
 
 
 def main():
