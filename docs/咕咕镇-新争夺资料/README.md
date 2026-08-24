@@ -28,13 +28,13 @@
 
 - 论坛 API（签到/搜索/抓取/发帖）：[论坛资料/网站api资料.md](../论坛资料/网站api资料.md)
 - Firefox 调试环境（MCP 抓包流程）：[Firefox Nightly 调试文档.md](../Firefox Nightly 调试文档.md)
-- 抓取工具：`tools/fetch_posts.py` / `fetch_publish_time.py` / `sort_posts.py` / `get_cookies.py`（论坛+咕咕镇 Cookie，用法见 网站api资料.md 第 5 章）
+- 抓取工具：`tools/forum/fetch_posts.py` / `fetch_publish_time.py` / `sort_posts.py` / `get_cookies.py`（论坛+咕咕镇 Cookie，用法见 网站api资料.md 第 5 章）
 
 ## 维护约定
 
 - **新知识（帖子）** → 写入 `01` 对应主题分区；**新接口实测** → `02`；**装备机制** → `03`；**自己摸索/实测的机制** → `04`；**脚本逻辑/决策** → `05`；**角色配置** → `07`
 - **每日运行/装备记录** → `logs/ggz_YYYYMMDD.log`（脚本自动生成，已脱敏可上传）
-- **帖子抓取/重排**：`python tools/fetch_posts.py`（抓未读）→ `fetch_publish_time.py` + `sort_posts.py`（补时间/重排表格）；表格文件固定为 `06-论坛帖子索引.md`
+- **帖子抓取/重排**：`python tools/forum/fetch_posts.py`（抓未读）→ `fetch_publish_time.py` + `sort_posts.py`（补时间/重排表格）；表格文件固定为 `06-论坛帖子索引.md`
 - **定期重扫帖子**：搜索页"发表"列 = **最后回复时间**，用它对比上次扫描时间判断新帖/新回复（方法详见 `06-论坛帖子索引.md`「重新扫描方法」节；**每次扫描后在「扫描历史」表追加记录**，作为下次的基准）
 - **引用规范**：文档间一律用本目录相对路径（如 `[02-接口.md](02-接口.md)`）
 - **单一事实来源**：接口只写 `02`，装备细节只写 `03`，规则细节只写 `04`，角色只写 `07`，其余文档引用而非重复

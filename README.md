@@ -66,7 +66,7 @@ node build.js
 
 ## 咕咕镇日常脚本
 
-- `tools/ggz_daily.py`：咕咕镇（momozhen.com）一键日常（加点/工坊/宝石/光环/许愿/沙滩/出击/翻牌/额外奖励），依赖 `cookie.txt`（由 `tools/get_cookies.py` 提取）
+- `tools/ggz/ggz_daily.py`：咕咕镇（momozhen.com）一键日常（加点/工坊/宝石/光环/许愿/沙滩/出击/翻牌/额外奖励），依赖 `cookie.txt`（由 `tools/get_cookies.py` 提取）
 - 用法见脚本头部注释或 `docs/咕咕镇-新争夺资料/05-脚本开发.md` §4A
 - ⚠️ **脚本在沙滩页面容易引起限流（f=1 连续请求返回空），建议配一个浏览器脚本（油猴）处理沙滩**，脚本做兜底
 

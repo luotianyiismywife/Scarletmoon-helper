@@ -10,11 +10,11 @@ node_modules/
 !.vscode/tasks.json
 
 # 论坛 Cookie（登录凭证，不入库）
-cookie.txt
+tools/cookie.txt
 
 # 本地运行日志（ggz_daily.py 等生成）
 # ⚠️ 2026-08-23：日志已脱敏（用户名/safeid → MD5），允许入库上传。
-#    tools/ggz_daily.py 的 Tee 写日志时自动替换；历史日志已批量脱敏。
+#    tools/ggz/ggz_daily.py 的 Tee 写日志时自动替换；历史日志已批量脱敏。
 # （原 logs/ 整目录忽略已移除，改为入库跟踪）
 
 # Python ����

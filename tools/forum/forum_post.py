@@ -2,13 +2,13 @@
 """绯月论坛发帖/回帖/查回复工具（PHPWind，2026-08-14 实测）。
 
 用法:
-    python tools/forum_post.py new --title "标题" --content-file body.txt [--fid 5]
-    python tools/forum_post.py new --title "标题" --content "正文" [--fid 5]
-    python tools/forum_post.py new --title-file title.txt --content-file body.txt [--fid 5]  # 标题从文件首行读
-    python tools/forum_post.py reply --tid 123456 --content "回复内容" [--fid 5]
-    python tools/forum_post.py reply --tid 123456 --content "内容" --floor 8         # 回复 8 楼
-    python tools/forum_post.py reply --tid 123456 --content "内容" --floors "8,9"   # 一次回复 8/9 两楼
-    python tools/forum_post.py check --tid 123456 --sf abc
+    python tools/forum/forum_post.py new --title "标题" --content-file body.txt [--fid 5]
+    python tools/forum/forum_post.py new --title "标题" --content "正文" [--fid 5]
+    python tools/forum/forum_post.py new --title-file title.txt --content-file body.txt [--fid 5]  # 标题从文件首行读
+    python tools/forum/forum_post.py reply --tid 123456 --content "回复内容" [--fid 5]
+    python tools/forum/forum_post.py reply --tid 123456 --content "内容" --floor 8         # 回复 8 楼
+    python tools/forum/forum_post.py reply --tid 123456 --content "内容" --floors "8,9"   # 一次回复 8/9 两楼
+    python tools/forum/forum_post.py check --tid 123456 --sf abc
 
 标题建议用 --title-file（标题含空格/引号/括号时命令行传参易被 shell 解析坏，
 2026-08-14 踩坑教训）；标题文件取第一行，其余行忽略。

@@ -2,9 +2,9 @@
 """从 docs/<资料目录>/<索引>.md 表格提取所有 tid+URL, 逐个 GET 帖子页提取真实发表时间。
 
 用法:
-    python tools/fetch_publish_time.py --limit 5   # 调试: 只处理前5篇
-    python tools/fetch_publish_time.py             # 全部(咕咕镇-新争夺资料/06-论坛帖子索引.md)
-    python tools/fetch_publish_time.py --dir 旧争夺资料 --index 03-论坛帖子索引.md
+    python tools/forum/fetch_publish_time.py --limit 5   # 调试: 只处理前5篇
+    python tools/forum/fetch_publish_time.py             # 全部(咕咕镇-新争夺资料/06-论坛帖子索引.md)
+    python tools/forum/fetch_publish_time.py --dir 旧争夺资料 --index 03-论坛帖子索引.md
 
 输出:
     docs/<资料目录>/publish_time.json  {tid: "YYYY-MM-DD HH:MM"}
@@ -18,12 +18,12 @@ import time
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DIR = "咕咕镇-新争夺资料"
 DEFAULT_INDEX = "06-论坛帖子索引.md"
 MD_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, DEFAULT_INDEX)
 OUT_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, "publish_time.json")
-COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
+COOKIE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookie.txt")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",

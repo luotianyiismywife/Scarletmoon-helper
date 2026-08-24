@@ -6,7 +6,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"all"
 			],
 			"group": "test",
@@ -17,7 +17,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"stat"
 			],
 			"group": "test",
@@ -28,7 +28,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"addpoint"
 			],
 			"group": "test",
@@ -39,7 +39,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"gem"
 			],
 			"group": "test",
@@ -50,7 +50,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"gemup"
 			],
 			"group": "test",
@@ -61,7 +61,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"halo"
 			],
 			"group": "test",
@@ -72,7 +72,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"wish"
 			],
 			"group": "test",
@@ -83,7 +83,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"beach"
 			],
 			"group": "test",
@@ -94,7 +94,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"refresh"
 			],
 			"group": "test",
@@ -105,7 +105,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"smelt"
 			],
 			"group": "test",
@@ -116,7 +116,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"pk"
 			],
 			"group": "test",
@@ -127,7 +127,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"gift"
 			],
 			"group": "test",
@@ -138,7 +138,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/ggz_daily.py",
+				"tools/ggz/ggz_daily.py",
 				"bonus"
 			],
 			"group": "test",
@@ -149,7 +149,7 @@
 			"type": "shell",
 			"command": "C:\\Windows\\py.exe",
 			"args": [
-				"tools/forum_post.py",
+				"tools/forum/forum_post.py",
 				"check",
 				"--tid",
 				"1083618",

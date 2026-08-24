@@ -2,11 +2,11 @@
 """批量抓取帖子正文并保存到 docs/<资料目录>/raw/。
 
 用法:
-    python tools/fetch_posts.py            # 抓取 咕咕镇-新争夺资料/06-论坛帖子索引.md 中所有 ⬜ 未读帖子
-    python tools/fetch_posts.py --limit 5  # 只抓前 5 篇（调试用）
-    python tools/fetch_posts.py --tid 1052153   # 只抓指定 tid
-    python tools/fetch_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md   # 抓旧争夺
-    python tools/fetch_posts.py --fid 5 --max-pages 3   # 板块扫描模式（kf-analysis 参考实现）
+    python tools/forum/fetch_posts.py            # 抓取 咕咕镇-新争夺资料/06-论坛帖子索引.md 中所有 ⬜ 未读帖子
+    python tools/forum/fetch_posts.py --limit 5  # 只抓前 5 篇（调试用）
+    python tools/forum/fetch_posts.py --tid 1052153   # 只抓指定 tid
+    python tools/forum/fetch_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md   # 抓旧争夺
+    python tools/forum/fetch_posts.py --fid 5 --max-pages 3   # 板块扫描模式（kf-analysis 参考实现）
 
 付费帖处理（2026-08-12）:
     - 检测 "此帖售价 N KFB" 特征
@@ -26,12 +26,12 @@ import time
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DIR = "咕咕镇-新争夺资料"
 DEFAULT_INDEX = "06-论坛帖子索引.md"
 RAW_DIR = os.path.join(ROOT, "docs", DEFAULT_DIR, "raw")
 MD_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, DEFAULT_INDEX)
-COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
+COOKIE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookie.txt")
 BASE = "https://bbs.kfpromax.com"
 
 HEADERS = {

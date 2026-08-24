@@ -104,7 +104,7 @@ Content-Type: application/x-www-form-urlencoded
 step=2&method=AND&sch_area=0&s_type=forum&f_fid=all&orderway=lastpost&asc=DESC&keyword=<GBK编码>&pwuser=&submit=全站搜索
 ```
 - `keyword` 必须按 **GBK** URL 编码（如"咕咕镇"=`%B9%BE%B9%BE%D5%F2`）；用 UTF-8 会搜到乱码/无结果
-- **⭐ 编码大坑（2026-08-13 实测）**：Python `requests` 用 dict 提交表单时默认按 **UTF-8** 编码 → keyword 乱码 → 服务器**静默失败**，返回的不是搜索结果页而是含侧栏"最新帖"的普通页面（看起来像 200 成功）。必须**手工拼 raw body**：`quote(kw.encode('gbk'))` 后拼进 `data=` 字符串（见 `tools/search_posts.py`）
+- **⭐ 编码大坑（2026-08-13 实测）**：Python `requests` 用 dict 提交表单时默认按 **UTF-8** 编码 → keyword 乱码 → 服务器**静默失败**，返回的不是搜索结果页而是含侧栏"最新帖"的普通页面（看起来像 200 成功）。必须**手工拼 raw body**：`quote(kw.encode('gbk'))` 后拼进 `data=` 字符串（见 `tools/forum/search_posts.py`）
 - **搜索需登录态**：cookie 失效时搜索同样静默返回首页（响应无 `action=quit`、len≈5000）；先确认登录态再搜索
 - `sch_area=0` 标题搜索；`s_type=forum` 版块范围
 - 需先 GET `/search.php` 建立会话（拿 PHPSESSID）再 POST
@@ -113,7 +113,7 @@ step=2&method=AND&sch_area=0&s_type=forum&f_fid=all&orderway=lastpost&asc=DESC&k
 - **⭐ 扫描用途**：搜索结果的"发表"列（最后回复时间）可用于**判断帖子是否有新内容**——对比上次扫描时间即可筛选新帖（tid 不在索引）和旧帖新回复（时间更新），无需逐篇打开（详见 咕咕镇-新争夺资料/06 索引「重新扫描方法」节）
 - 页脚：`共搜索到了 N 条信息 本日剩余搜索次数 M 次`（**每日搜索次数有限**，实测约 30 次/日）
 - 每页约 60 条；结果 ≤60 条时只有 1 页（实测："新争夺"58 条 1 页、"旧争夺"355 条多页）
-- **工具**：`tools/search_posts.py --kw 关键词 [--pages N] [--json out.json] [--dump xx.html]`（GBK 编码 + 翻页 + 去重 + JSON 输出）
+- **工具**：`tools/forum/search_posts.py --kw 关键词 [--pages N] [--json out.json] [--dump xx.html]`（GBK 编码 + 翻页 + 去重 + JSON 输出）
 
 **翻页（GET）：**
 ```
@@ -193,7 +193,7 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 
 ### 3.6 发帖 / 回帖：`/post.php`（2026-08-14 浏览器+脚本实测 ⭐）
 
-**已实现脚本**：`tools/forum_post.py`（new 发帖 / reply 回帖 / check 查回复）。
+**已实现脚本**：`tools/forum/forum_post.py`（new 发帖 / reply 回帖 / check 查回复）。
 
 #### 会话前提（关键坑）
 - **必须用 `requests.Session`**（域内 cookie + 自动跟随 Set-Cookie 的 PHPSESSID）。用 urllib 手拼 `Cookie` 头会导致会话建立不了，**所有页面被 302 到 `login.php`**（实测）。
@@ -256,7 +256,7 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 - 楼层号规则：**0 = 楼主**，1/2/3… = 第 1/2/3 个回复（页面 `postreply('回 N楼(作者) 的帖子')` 即楼层号）
 
 **楼层号/作者提取**：从帖子页抓所有 `postreply('回 N楼(作者) 的帖子','作者')`（每个回复一个），
-按 N 匹配目标楼层取作者。已实现于 `tools/forum_post.py reply(--floor N)`；多楼层建议
+按 N 匹配目标楼层取作者。已实现于 `tools/forum/forum_post.py reply(--floor N)`；多楼层建议
 `--floors "8,9"`（逗号分隔）→ 逐个提取作者拼多个 `[quote]` 前缀。
 
 **⚠️ 删除自己回复**：PHPWind 普通用户**无删除权限**（页面只有"编辑帖子"无"删除"）。
@@ -336,12 +336,12 @@ GET https://bbs.kfpromax.com/search.php?step=2&keyword=%B9%BE%B9%BE%D5%F2&sid=<�
 - `cookies.sqlite` 路径：`%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\cookies.sqlite`
 - 表：`moz_cookies`（含 `originAttributes` 分区列，查询时按 host LIKE 过滤即可）
 
-### tools/search_posts.py（2026-08-13 新增）
+### tools/forum/search_posts.py（2026-08-13 新增）
 - 全站搜索标题关键字，抓全部结果页，输出 tid/标题/URL/最后回复时间
-- `python tools/search_posts.py --kw 旧争夺 [--pages N] [--json out.json] [--dump xx.html]`
+- `python tools/forum/search_posts.py --kw 旧争夺 [--pages N] [--json out.json] [--dump xx.html]`
 - 已内置 GBK 编码修复（手工拼 raw body）、keyword 链接过滤、翻页、去重；探测时先 `--pages 1` 省搜索次数
 
-### tools/fetch_posts.py
+### tools/forum/fetch_posts.py
 - 读取索引表格中的 ⬜ 未读帖子 URL → 批量抓取正文 → 存 `docs/<资料目录>/raw/{tid}.txt`
 - **`--dir` / `--index` 指定资料目录与索引文件**（默认 `咕咕镇-新争夺资料/06-论坛帖子索引.md`；旧争夺用 `--dir 旧争夺资料 --index 03-论坛帖子索引.md`）
 - 用 `requests.Session`：先注入 `2ed4e_*` Cookie，PHPSESSID 由服务器自动补

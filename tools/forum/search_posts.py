@@ -6,9 +6,9 @@
     搜索页"发表"列 = 最后回复时间(非发帖时间), 真实发表时间需进帖子页(见 fetch_publish_time.py)。
 
 用法:
-    python tools/search_posts.py --kw 争夺                 # 搜索并打印全部结果
-    python tools/search_posts.py --kw 争夺 --json out.json # 结果存 JSON
-    python tools/search_posts.py --kw 争夺 --pages 1       # 只抓第1页(探测用, 省搜索次数)
+    python tools/forum/search_posts.py --kw 争夺                 # 搜索并打印全部结果
+    python tools/forum/search_posts.py --kw 争夺 --json out.json # 结果存 JSON
+    python tools/forum/search_posts.py --kw 争夺 --pages 1       # 只抓第1页(探测用, 省搜索次数)
 
 输出 JSON 结构: [{tid, title, url, lastreply, forum}]
 
@@ -28,8 +28,8 @@ from urllib.parse import quote
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COOKIE_PATH = os.path.join(ROOT, "cookie.txt")
+TOOLS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COOKIE_PATH = os.path.join(TOOLS_DIR, "cookie.txt")
 BASE = "https://bbs.kfpromax.com"
 
 HEADERS = {

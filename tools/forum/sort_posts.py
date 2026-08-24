@@ -2,15 +2,15 @@
 """按真实发表时间重新排序 docs/<资料目录>/<索引>.md 已读帖子记录表。
 
 用法:
-    python tools/sort_posts.py
-    python tools/sort_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md
+    python tools/forum/sort_posts.py
+    python tools/forum/sort_posts.py --dir 旧争夺资料 --index 03-论坛帖子索引.md
 """
 import argparse
 import json
 import os
 import re
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DIR = "咕咕镇-新争夺资料"
 DEFAULT_INDEX = "06-论坛帖子索引.md"
 MD_PATH = os.path.join(ROOT, "docs", DEFAULT_DIR, DEFAULT_INDEX)

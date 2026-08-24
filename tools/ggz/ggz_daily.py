@@ -2,19 +2,19 @@
 """咕咕镇日常执行脚本（按 docs/咕咕镇-新争夺资料/05-脚本开发.md §4A 流程）。
 
 用法:
-    python tools/ggz_daily.py stat          # 汇总状态（战场/工坊/翻牌）
-    python tools/ggz_daily.py addpoint      # [0.5] 加点（自动分配剩余点）
-    python tools/ggz_daily.py gem           # [1] 工坊收菜+开工（加工中→收工→自动重开）
-    python tools/ggz_daily.py gemup         # [1.5] 提升宝石（B以下只升梦>红>银；比例低优先）
-    python tools/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
-    python tools/ggz_daily.py wish          # [3] 许愿池（按 WISH_MODE：combo 300w 十连送1=11次 / single 30w×N）
-    python tools/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新；--no-refresh 禁用自动刷新不耗箱）
-    python tools/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
-    python tools/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
-    python tools/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
-    python tools/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
-    python tools/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水）
-    python tools/ggz_daily.py all           # 一键日常（以上全部按序执行）
+    python tools/ggz/ggz_daily.py stat          # 汇总状态（战场/工坊/翻牌）
+    python tools/ggz/ggz_daily.py addpoint      # [0.5] 加点（自动分配剩余点）
+    python tools/ggz/ggz_daily.py gem           # [1] 工坊收菜+开工（加工中→收工→自动重开）
+    python tools/ggz/ggz_daily.py gemup         # [1.5] 提升宝石（B以下只升梦>红>银；比例低优先）
+    python tools/ggz/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
+    python tools/ggz/ggz_daily.py wish          # [3] 许愿池（按 WISH_MODE：combo 300w 十连送1=11次 / single 30w×N）
+    python tools/ggz/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新；--no-refresh 禁用自动刷新不耗箱）
+    python tools/ggz/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
+    python tools/ggz/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
+    python tools/ggz/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
+    python tools/ggz/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
+    python tools/ggz/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水）
+    python tools/ggz/ggz_daily.py all           # 一键日常（以上全部按序执行）
 
 日志: 每次执行同时输出到终端 + logs/ggz_YYYYMMDD.log（完整留档，
       终端输出被吞/截断时以日志文件为准）。
@@ -40,6 +40,15 @@ except ImportError:
 
 BASE = "https://www.momozhen.com"
 
+# ===== 日志路径脱敏（2026-08-24）=====
+# Python traceback 会把脚本绝对路径（如 C:\Users\xxx\...\ggz_daily.py）写入日志，
+# 暴露本机目录结构。日志会上传/入库 → 统一替换：
+#   项目根绝对路径 → "."（保留相对路径可读性）
+#   用户主目录      → "~"（兜底，防 site-packages 等其它绝对路径泄漏）
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+USER_HOME = os.path.expanduser("~")
+
 
 class AuthExpiredError(RuntimeError):
     """咕咕镇 cookie 失效（单会话被浏览器顶掉 / 每日刷新）。
@@ -57,6 +66,8 @@ class Tee:
     加日志文件兜底（logs/ggz_YYYYMMDD.log）。
     2026-08-23：写日志流前对 SECRETS 里的明文做 MD5 脱敏（终端显示原文，
     日志文件可上传；logs/ 已取消 gitignore 入库）。
+    2026-08-24：日志流额外做路径脱敏（PROJECT_ROOT→"."、USER_HOME→"~"），
+    Python traceback 里的本机绝对路径不再出现在日志中。
     """
 
     def __init__(self, *streams):
@@ -68,6 +79,9 @@ class Tee:
                 if s not in (sys.__stdout__, sys.__stderr__):
                     for plain, masked in SECRETS.items():
                         data = data.replace(plain, masked)
+                    # 先替换更具体的项目根（→"."），再兜底用户主目录（→"~"）
+                    data = data.replace(PROJECT_ROOT, ".")
+                    data = data.replace(USER_HOME, "~")
                 s.write(data)
             except Exception:
                 pass
@@ -84,7 +98,7 @@ def setup_logging():
     """重定向 stdout/stderr 到 终端 + logs/ggz_YYYYMMDD.log（追加）。
     必须在任何输出前调用。
     """
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "ggz_%s.log" % datetime.date.today().strftime("%Y%m%d"))
     log_fp = open(log_path, "a", encoding="utf-8")
@@ -105,6 +119,39 @@ def load_cookie():
 COOKIE = load_cookie()
 USER = None   # 动态: 主页提取
 ZID = None    # 动态: f=8 出战中角色
+
+# cookie 自动刷新状态（防 request() 多次触发刷新）
+_cookie_refreshed = False
+
+
+def refresh_cookie_auto():
+    """cookie 失效时自动调用 get_cookies.smart_refresh_ggz() 刷新。
+
+    逻辑闭环（2026-08-24 用户设计）：
+      - Firefox Nightly 运行中 → 从 cookies.sqlite 提取（浏览器有最新登录态）
+      - Firefox Nightly 未运行 → 走入口链刷新（--refreshggz，不依赖浏览器）
+    成功后重新加载 COOKIE 全局变量。整个会话只刷新一次（防多请求重复触发）。
+    返回 True=刷新成功，False=刷新失败/已刷新过。
+    """
+    global COOKIE, _cookie_refreshed
+    if _cookie_refreshed:
+        return False  # 本次会话已刷新过，不再重复
+    _cookie_refreshed = True
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import get_cookies
+        print("\n⚠️ 检测到 cookie 失效，自动刷新中 ...")
+        if get_cookies.smart_refresh_ggz():
+            COOKIE = load_cookie()  # 重新加载刷新后的 cookie
+            print("✅ cookie 已自动刷新，重试请求\n")
+            return True
+        else:
+            print("❌ cookie 自动刷新失败，请手动运行: py tools/get_cookies.py --game")
+            return False
+    except Exception as e:
+        print(f"❌ cookie 自动刷新异常: {e}")
+        print("请手动运行: py tools/get_cookies.py --game")
+        return False
 
 # ===== 日志脱敏（2026-08-23）=====
 # logs/ 会被上传/入库，用户名与 safeid 是敏感字段。
@@ -167,10 +214,13 @@ def request(url, data=None, retries=3, xhr=True):
                 if data is not None else _SESSION.get(url, headers=headers, timeout=60)
             # ⚠️ cookie 失效检测（2026-08-18）：咕咕镇单会话，浏览器重新打开游戏页
             # 会把脚本会话顶掉，此时任何重试都无意义，直接报错提示重抓 cookie。
+            # 2026-08-24：改为自动刷新 cookie（smart_refresh_ggz）后重试一次。
             if "重新登录".encode("utf-8") in resp.content:
+                if refresh_cookie_auto():
+                    continue  # 刷新成功，重试本次请求（用新 COOKIE）
                 raise AuthExpiredError(
                     "咕咕镇 cookie 已失效（浏览器登录顶掉/每日刷新），"
-                    "请刷新游戏 cookie 后重跑 tools/get_cookies.py --game")
+                    "自动刷新失败，请手动运行 tools/get_cookies.py --game")
             return resp.content
         except AuthExpiredError:
             raise
@@ -526,7 +576,9 @@ def parse_equips(html_text, want_id=False):
             affixes.append({"name": affix_name, "text": affix_text,
                             "pct": pct, "color": color})
         mystery = "[神秘属性]" in btn or "神秘属性" in btn
-        m = re.search(r"zbtip\('(\d+)','4'\)", btn)
+        # bid：沙滩装备 zbtip('ID','4')，仓库装备 zbtip('ID','3')（2026-08-24 修复：
+        #   原仅匹配 '4'，导致仓库 f=2 解析 bid 全为 None，smelt/tidy 无法操作）
+        m = re.search(r"zbtip\('(\d+)','[34]'\)", btn)
         bid = m.group(1) if m else None
         result.append({"icon": icon, "quality": quality, "name": name,
                        "level": level, "total": total, "mystery": mystery, "bid": bid,
@@ -634,6 +686,24 @@ def _read_beach(retries=3, interval=3):
                        f"（最后 {len(last_raw)} 字符: {last_raw[:120]!r}），疑似限流/格式变化")
 
 
+def get_beach_countdown():
+    """读取沙滩自然刷新倒计时（分钟）。
+
+    fyg_beach.php 页面 HTML 服务端渲染：
+      <span class="pull-right">距离下次随机装备被冲上沙滩还有 1299 分钟</span>
+    ⚠️ f=1 接口**不返回**倒计时（2026-08-24 实测：f=1 只返回装备列表），
+       倒计时只能从 fyg_beach.php 页面抓。实测页面 7205 字符、倒计时为静态值。
+
+    返回 int 分钟数；读取失败/格式变化返回 None（调用方自行降级处理）。
+    """
+    try:
+        text = dec(request(BASE + "/fyg_beach.php"))
+        m = re.search(r"距离下次随机装备被冲上沙滩还有\s*(\d+)\s*分钟", text)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
 def beach(allow_refresh=True, wait_after_refresh=True):
     """[4] 沙滩收取 + 清理（4.5 规则）。
 
@@ -653,6 +723,21 @@ def beach(allow_refresh=True, wait_after_refresh=True):
       5. 限流：momozhen 对连续请求限流（返回空/SSL 断开），requests.Session 已缓解，
          但高频场景仍需间隔 ≥2s。
     """
+    # ⚠️ 自然刷新倒计时（2026-08-24 新增）：每次执行都打印一次，留档便于追溯
+    #   "自然刷新时机"。数据源 = fyg_beach.php 页面服务端渲染（f=1 接口不返回）。
+    #   1320 分钟倒计时归零后装备**不会立即**冲上沙滩，服务器还有 ≈4~14 分钟
+    #   调度延迟。完整实测时间线（2026-08-24）：
+    #     08-23 11:28:20  最后一次 c=12 强制刷新 → 倒计时重置 1320 分钟
+    #     08-24 09:28:20  倒计时理论归零（1320 分钟走完）
+    #     08-24 09:31-32  日常脚本沙滩步骤 → 沙滩仍空（错过自然批次）
+    #     08-24 ≈09:42    浏览器确认沙滩已有 10 件
+    #     → 实际冲装备落在 09:32~09:42，相对理论归零延迟 ≈4~14 分钟
+    countdown = get_beach_countdown()
+    if countdown is not None:
+        print(f"沙滩自然刷新倒计时: {countdown} 分钟")
+    # 装备箱持有量（2026-08-24 提到开头无条件打印，原仅在沙滩空分支打印）
+    boxes = get_items().get("it004", 0)
+    print(f"随机装备箱持有: {boxes}")
     try:
         items, raw = _read_beach()
     except RuntimeError as e:
@@ -668,12 +753,24 @@ def beach(allow_refresh=True, wait_after_refresh=True):
         #   f=6/2/12 正常但 f=1 空，浏览器同 IP 也空）→ 全程读不到。
         #   ✅ 新策略（浏览器行为一致）：c=12 后先等 15s 空窗期 → 读 1 次；
         #      失败则 10s 间隔重试（最多 4 次覆盖 15-55s），低频率不触发限流。
-        boxes = get_items().get("it004", 0)
-        print(f"沙滩空，无装备（随机装备箱持有 {boxes}）")
+        print(f"沙滩空，无装备")
+        # 若倒计时 ≤15 分钟 → 自然刷新在即，**不耗装备箱**，跳过等自然刷新
+        #   （否则 c=12 会重置计时，白耗 1 箱且错过马上要来的自然批次）。
+        if countdown is not None and countdown <= 15:
+            print(f"→ 自然刷新倒计时仅剩 {countdown} 分钟（归零后约 4~14 分钟延迟），"
+                  f"即将自动冲装备 → 跳过本次（保留装备箱）")
+            return
         if allow_refresh and boxes > 0:
             print("→ 有装备箱，自动强制刷新沙滩...")
             r = click(12)
             show("c=12 刷新沙滩返回", r)
+            # c=12 成功后倒计时重置 1320、装备箱 -1，重新读取打印（与开头一致）
+            if r.strip() == "ok":
+                boxes = get_items().get("it004", 0)
+                print(f"随机装备箱持有: {boxes}（刷新消耗 1 个）")
+                cd = get_beach_countdown()
+                if cd is not None:
+                    print(f"沙滩自然刷新倒计时: {cd} 分钟（c=12 已重置）")
         elif allow_refresh:
             print("→ 无随机装备箱，跳过")
             return
@@ -682,21 +779,31 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             return
         else:
             print("→ 刚刷新过（allow_refresh=False），等待空窗期过去...")
-        # 空窗期 ~15-21s：先等 15s → 读 1 次 → 失败 10s 间隔重试（覆盖 15-55s）
-        time.sleep(15)
+        # ⚠️ c=12 后读取策略（2026-08-24 重构）：
+        #   浏览器 gx_sxst() 在 c=12 返回 ok 后执行 window.location.reload()
+        #   （整页 GET fyg_beach.php），页面加载时 stall() 再 POST f=1 读装备。
+        #   脚本原先 c=12 后直接 POST f=1，少了 reload 这步 → 服务端可能
+        #   需要一次页面访问确认刷新结果，否则 f=1 在空窗期返回空
+        #   （2026-08-24 实测：c=12 ok 后 55s 内 f=1 全空，但浏览器 reload 立即有装备）。
+        #   ✅ 新策略：c=12 后先 GET fyg_beach.php（模拟 reload）→ 立即读 f=1；
+        #      仍空则 10s 间隔重试兜底（最多 4 次覆盖 0-30s）。
+        try:
+            request(BASE + "/fyg_beach.php")  # 模拟浏览器 reload，触发服务端状态确认
+        except Exception:
+            pass  # reload 失败不致命，继续尝试读 f=1
         for attempt in range(4):
             try:
                 items, raw = _read_beach(retries=1)  # 单次读取
             except RuntimeError:
                 items = []
             if items:
-                print(f"  ✅ 刷新后第 {attempt + 1} 次（{15 + attempt * 10}s）读取到 {len(items)} 件装备")
+                print(f"  ✅ 刷新后第 {attempt + 1} 次读取到 {len(items)} 件装备")
                 break
             if attempt < 3:
-                print(f"  ⏳ 刷新后 {15 + (attempt + 1) * 10}s 仍空，10s 后重试...")
+                print(f"  ⏳ 刷新后第 {attempt + 1} 次仍空，10s 后重试...")
                 time.sleep(10)
         else:
-            print("  ⚠️ 刷新后 55s 仍未读到装备（可能服务器延迟，可稍后重跑 beach）")
+            print("  ⚠️ 刷新后 30s 仍未读到装备（可能服务器延迟，可稍后重跑 beach）")
             return
     worn = parse_equips(read_block(6))
     print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
@@ -748,7 +855,7 @@ def smelt():
     if not items:
         print("仓库空，无可熔炼")
         return
-    # f=2 仓库装备 id 在 zbtip('id','3')，需补充解析
+    # f=2 仓库装备 id 在 zbtip('id','3')，parse_equips 已兼容（2026-08-24 修复）
     smeltable = []
     for it in items:
         if it["quality"] >= 3 and it["total"] >= 410 and not it["mystery"] and it["total"] < 516:
