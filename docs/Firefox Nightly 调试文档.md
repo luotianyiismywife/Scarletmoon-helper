@@ -1,7 +1,7 @@
 # Firefox Nightly 浏览器调试文档
 
 > 用途：记录用 Firefox Nightly + firefox-devtools-mcp 调试咕咕镇/论坛接口的完整流程与注意事项。
-> 最后更新：2026-08-23
+> 最后更新：2026-08-24
 
 ---
 
@@ -199,3 +199,60 @@ Get-Process -Id <OwningProcess> | Select ProcessName,Path
 
 - 2828 被占用且不是 Nightly → 可能是残留的 MCP npx 进程，杀掉后重试
 - 2828/9222 都没有 → Nightly 没启动（见 4.2）
+
+---
+
+## 7. ⚠️ profile 锁（parent.lock）排障（2026-08-24 实战）
+
+### 7.1 症状
+
+**"Nightly 起不来"**，具体表现为：
+- 主窗口停在 **"Nightly - 选择用户配置文件"**（Profile Manager），浏览器本体没起来
+- 2828/9222 端口都无监听（`Get-NetTCPConnection` 无输出）
+- 进程列表里有 `crashhelper.exe`（说明之前崩过）
+- 主进程命令行是**裸启动**（无 `--marionette` 等参数）——是 Profile Manager 窗口的进程，不是浏览器本体
+
+### 7.2 parent.lock 机制
+
+- `parent.lock` 是 profile 目录下的 **0 字节空文件**（`%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\parent.lock`）
+- 锁的实现是 **Windows 文件句柄**：Firefox 启动时以独占方式打开它，**谁持有句柄谁占锁**
+- 正常退出时释放句柄，但**文件本身残留是正常现象**，0 字节文件在≠被锁着
+- **判断是否被锁：看有没有进程还持着句柄，不是看文件在不在**
+
+### 7.3 根因链条
+
+```
+崩溃（crashhelper 出现）
+  → 主进程死亡但子进程/句柄未完全回收
+  → profile 锁未释放
+  → 下次启动检测到 profile 被占用，行为异常（只弹 Profile Manager，本体起不来）
+  → 端口 2828/9222 无监听，MCP 报 unknown error
+```
+
+### 7.4 正确修复顺序（重要！）
+
+> ⚠️ **先杀干净进程，再删锁文件**。顺序反了的话，活进程会重新持锁，删了也白删。
+
+```powershell
+# 1. 安全杀掉所有 Nightly 进程（按路径过滤，勿用 Get-Process -Name firefox，会误杀标准版）
+Get-Process | Where-Object { $_.Path -like '*Firefox Nightly*' } | Stop-Process -Force
+
+# 2. 确认杀干净后，删除残留锁文件
+Remove-Item "$env:APPDATA\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\parent.lock" -Force
+
+# 3. 重新带参数启动（见 §3.1）
+Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList @("--marionette", "--remote-debugging-port", "9222", "-P")
+```
+
+### 7.5 排查命令速查
+
+```powershell
+# 看 Nightly 进程的窗口标题（卡在 Profile Manager 时标题为"选择用户配置文件"）
+Get-Process | Where-Object { $_.Path -like '*Firefox Nightly*' } | Select Id,ProcessName,MainWindowTitle,StartTime
+
+# 看主进程命令行（裸启动 = 没带 --marionette 参数）
+Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" | Select ProcessId,CommandLine
+
+# 看锁文件
+Get-ChildItem "$env:APPDATA\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\" -Force | Where-Object Name -match 'lock|parent'
+```
