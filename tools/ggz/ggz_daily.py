@@ -318,14 +318,64 @@ def addpoint():
     show("c=2 加点返回", r)
 
 
+GEM_PANEL_COLS = [
+    # (栏名, 宝石名) —— f=21 六栏固定顺序（04 §4.3：1贝壳红石/2装备箱银石/
+    # 3灵魂药水金石/4宝石原石梦石/5星沙虚石/6幻影经验幻石）
+    ("贝壳", "红石"), ("随机装备箱", "银石"), ("灵魂药水", "金石"),
+    ("宝石原石", "梦石"), ("星沙", "虚石"), ("幻影经验", "幻石"),
+]
+
+
+def parse_gem_panel(t):
+    """解析 f=21 工坊面板：各栏 加工角色等级/角色名/宝石数/每分钟效率。
+
+    每栏 alert div 结构（2026-08-27 浏览器实测）：
+      已拾取<br>67040贝壳<br>Lv.800 伊 (赶海中...)<br>红石4<br>每分钟 +160贝壳
+      20.112%概率出产<br>随机装备箱<br>Lv.800 命 (组装中...)<br>银石4<br>每分钟 +0.048%概率
+      已开采<br>0星沙(0.3352)<br>Lv.190 默 (挖矿中...)<br>虚石0<br>每分钟 +0.0008星沙
+    → 统一按 <br> 切 5 段：[当前值, 道具名, Lv.X 角色 (状态), 宝石N, 每分钟 +Y]
+    返回 [(栏名, 等级, 角色, 宝石数, 效率文本), ...]；解析失败返回 []。
+    """
+    rows = []
+    blocks = re.findall(r'<div class="alert alert-info[^>]*>(.*?)</div>', t, re.S)
+    for i, block in enumerate(blocks):
+        if i >= len(GEM_PANEL_COLS):
+            break
+        col_name, gem_name = GEM_PANEL_COLS[i]
+        parts = [p.strip() for p in re.split(r"<br\s*/?>", block) if p.strip()]
+        if len(parts) < 5:
+            continue
+        m = re.search(r"Lv\.(\d+)\s*(\S+)", parts[2])
+        g = re.search(gem_name + r"(\d+)", parts[3])
+        rate = re.sub(r"<[^>]+>", "", parts[4]).strip()
+        if m and g:
+            rows.append((col_name, gem_name, int(m.group(1)), m.group(2),
+                         int(g.group(1)), rate))
+    return rows
+
+
+def show_gem_panel(t, title="工坊面板"):
+    """打印工坊面板摘要（各栏角色等级/宝石数/效率），供日志留档与收益核算。"""
+    rows = parse_gem_panel(t)
+    if not rows:
+        print(f"[{title}] 解析失败（未加工或格式变化）")
+        return
+    print(f"[{title}] 加工角色等级/宝石数/效率：")
+    for col, gem_name, lv, char, gems, rate in rows:
+        print(f"  {col}: Lv.{lv} {char} | {gem_name}{gems} | {rate}")
+
+
 def gem():
     """[1] 工坊收菜：加工中 → 收工拿收益 → 重新开工；未加工 → 开工。
 
     c=30 为收工/开工切换（同按钮）。收工返回收益统计，实测收工后自动重新开工，
     但 8-12 出现过开工状态丢失（隔天变"开始加工"），故收工后检查、未自动开工则手动开工。
+    2026-08-27：收工前记录各栏加工角色等级/宝石数/每分钟效率（开工随机换人，
+    等级系数决定增长率，留档供收益核算——05 §4.4d 公式）。
     """
     t = read_block(21)
     if "收工" in t:
+        show_gem_panel(t, "收工前")
         print("工坊加工中 → 收工...")
         r = click(30)
         if "8小时" in r:
@@ -337,14 +387,17 @@ def gem():
             print("收工后未自动开工 → 手动开工...")
             r2 = click(30)
             show("c=30 开工返回", r2)
+            show_gem_panel(read_block(21), "新开工")
         elif "收工" in t2:
             print("✅ 收工完成，工坊仍在加工中（异常）")
         else:
             print("✅ 收工完成，工坊已自动重新开工")
+            show_gem_panel(t2, "新开工")
     elif "开始加工" in t:
         print("工坊未加工 → 开工...")
         r = click(30)
         show("c=30 开工返回", r)
+        show_gem_panel(read_block(21), "新开工")
     else:
         print("⚠️ 未知工坊状态: " + strip_tags(t)[:200])
 
