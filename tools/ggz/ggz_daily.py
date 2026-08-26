@@ -12,9 +12,9 @@
     python tools/ggz/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
     python tools/ggz/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
     python tools/ggz/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
-    python tools/ggz/ggz_daily.py gift          # [6] 翻牌（无透视策略，3 同色结算）
-    python tools/ggz/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水）
-    python tools/ggz/ggz_daily.py all           # 一键日常（以上全部按序执行）
+    python tools/ggz/ggz_daily.py gift [--bonus1|--bonus2]  # [6] 翻牌（透视自动检测；--bonus1 耗1药水再领 / --bonus2 耗2药水重置再翻）
+    python tools/ggz/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水；手动）
+    python tools/ggz/ggz_daily.py all [--bonus1|--bonus2]  # 一键日常（按序执行；--bonus 显式开启翻牌后药水操作）
 
 日志: 每次执行同时输出到终端 + logs/ggz_YYYYMMDD.log（完整留档，
       终端输出被吞/截断时以日志文件为准）。
@@ -978,13 +978,44 @@ def bonus():
     show("c=13&id=1 额外奖励", r)
 
 
-def gift():
-    """[6] 翻牌（2026-08-12 实测机制）：
+def gift(bonus=0):
+    """[6] 翻牌 + 可选药水 bonus（2026-08-12 实测机制 + 2026-08-26 透视自动检测 + bonus 配置项）：
     - f=10 每张牌一个按钮：有 giftop(N) onclick = 未翻；btn-info/success/warning/danger = 已翻
     - 品质→颜色：btn-info=幸运(蓝) btn-success=稀有(绿) btn-warning=史诗(黄) btn-danger=传说(红)
     - c=8 翻牌：成功直接返回结算文本（含"获得"）；"该牌面已翻开" = 该张已翻
-    - 策略：统计已翻颜色，某色 3 张即结算停止；否则按序翻未翻牌追色
+    - ⭐ 透视自动检测（2026-08-26 新增）：f=10 返回体若含 `是"品质1,品质2,..."</p>`
+      （12 个品质逗号分隔，slack 源码同款正则，兼容全角/半角引号）= 服务端已开翻牌透视
+      → 提前泄露全部牌品质 → 定向翻收益最大化：优先 3 传说(红)（档位最高，含全套附加），
+      其次 3 史诗(黄)。为什么：透视是服务端按账号下发的条件功能，非人人有（08-26 Nightly
+      实测本账号无、未翻牌零泄露、品质纯服务端判定）。哪天账号被动开透视，脚本须当天
+      立即吃满红利——盲翻 = 白浪费精准翻红/黄能力。
+    - 无透视 → 原策略：按序翻未翻牌 + 统计颜色，某色 3 张即结算停止。
+    - ⭐ bonus 配置项（2026-08-26 用户要求；药水默认不自动用，需显式指定）：
+        bonus=0（默认）→ 仅翻牌，不耗药水
+        bonus=1（--bonus1）→ 翻牌后 c=13&id=1 耗 1 药水再领一次翻牌奖励
+          （固定 6000 贝壳+6000 经验，08-19~26 日志一致；药水不足返回"物品不足"零消耗）
+        bonus=2（--bonus2）→ 翻牌后 c=13&id=2 耗 2 药水**重置今日狗牌+翻牌**
+          （需"出击≥5次"前置，slack 成功判定=返回以"可出击数已刷新"开头）
+          → 重新出击拿 3 狗牌（pk）→ 再翻牌一次（第二轮 bonus=0，防递归）
     """
+    _gift_flip()
+    if bonus == 1:
+        r = click(13, id=1)
+        show("c=13&id=1 额外奖励(--bonus1 耗1药水)", r)
+    elif bonus == 2:
+        r = click(13, id=2)
+        show("c=13&id=2 重置狗牌+翻牌(--bonus2 耗2药水)", r)
+        if r.startswith("可出击数已刷新"):
+            print("\n→ 重置成功，重新出击拿 3 狗牌（pk）...")
+            pk()
+            print("\n→ 重新翻牌（本轮 bonus=0，不再触发）...")
+            _gift_flip()
+        else:
+            print("⚠️ 重置未成功（出击<5 或药水不足，服务器拒绝且不扣药水），跳过第二轮")
+
+
+def _gift_flip():
+    """[6] 翻牌核心（由 gift() 调用，不处理药水）：透视自动检测 + 定向翻红/黄 / 无透视盲翻。"""
     COLOR_CLASS = {"btn-info": "蓝(幸运)", "btn-success": "绿(稀有)",
                    "btn-warning": "黄(史诗)", "btn-danger": "红(传说)"}
 
@@ -1003,6 +1034,21 @@ def gift():
             result.append({"pos": i, "name": text, "flipped": not can_flip, "color": color})
         return result
 
+    def detect_perspective():
+        """⭐ 翻牌透视自动检测（2026-08-26 新增）。
+        读 f=10 原始 HTML，匹配 slack 源码的透视文本 `是"品质1,品质2,..."</p>`
+        （12 个品质按从左到右 12 张牌位置对应；兼容全角/半角引号）。
+        返回 12 个品质的 list；未命中（无透视）返回 None。
+        为什么要做：透视是服务端按账号下发的条件功能，账号哪天被开启后 f=10 会
+        提前泄露全部牌品质。被动开透视当天脚本即自动切定向翻红/黄，无需人工改代码。"""
+        t = read_block(10)
+        m = re.search(r'是[“"]([^”"]+)[”"]</p>', t)
+        if not m:
+            return None
+        persp = [x.strip() for x in m.group(1).split(",")]
+        # 正常 12 张牌恰好 12 个品质；数量异常视为未开透视（防误判乱翻）
+        return persp if len(persp) == 12 else None
+
     state = parse_gift()
     print("翻牌区状态:")
     for s in state:
@@ -1019,21 +1065,49 @@ def gift():
         print("✅ 已有同色 3 张（今日已结算），翻牌完成")
         return
 
-    # 按序翻未翻的牌
-    for s in state:
-        if s["flipped"]:
-            continue
+    def do_flip(s):
+        """翻一张牌并处理返回；返回 True = 应停止（已结算/需先拿狗牌），False = 继续。
+        ⚠️ 拒翻判定先于结算判定：未拿满 3 狗牌时返回
+        "请先在争夺战场拿到3枚狗牌，狗牌在PVP/PVE胜利获得"（含"获得"但非结算，
+        2026-08-17 实测踩坑）。真正的结算文本才含"获得"。"""
         r = click(8, id=s["pos"])
         txt = strip_tags(r)
         print(f"\n翻牌 #{s['pos']} ({s['name']}): {txt[:120]}")
-        # ⚠️ 拒翻判定先于结算判定：未拿满 3 狗牌时返回
-        # "请先在争夺战场拿到3枚狗牌，狗牌在PVP/PVE胜利获得"（含"获得"但非结算，
-        # 2026-08-17 实测踩坑）。结算文本才含"获得"。
         if "狗牌" in txt and ("请先" in txt or "拿到" in txt or "胜利获得" in txt):
             print("⏹ 需先拿满 3 狗牌才能翻牌，停止")
-            return
+            return True
         if "获得" in txt:  # 结算成功
             print("🎉 结算完成！")
+            return True
+        return False
+
+    # ⭐ 透视定向翻（2026-08-26 新增）：优红(传说) > 黄(史诗)。每色恰好 3 张，
+    # 翻到第 3 张同色即触发服务端结算（返回含"获得"）。未命中透视则跳过本段走盲翻。
+    persp = detect_perspective()
+    if persp:
+        print(f"🔮 检测到翻牌透视: {'/'.join(persp)}")
+        for target, label in (("传说", "红(传说)"), ("史诗", "黄(史诗)")):
+            positions = [i + 1 for i, q in enumerate(persp) if q == target]
+            if len(positions) < 3:
+                print(f"  ↪ 透视下{label}仅 {len(positions)} 张，无法凑 3 同色，跳过")
+                continue
+            print(f"→ 定向翻 {label} 3 张（位置 {positions[:3]}）")
+            for pos in positions[:3]:
+                s = state[pos - 1]
+                if s["flipped"]:
+                    print(f"  ↪ 位置 {pos} 已翻，跳过")
+                    continue
+                if do_flip(s):
+                    return
+                state = parse_gift()  # 刷新已翻状态（透视下第 3 张必结算）
+            print(f"⚠️ {label} 3 张翻完仍未结算（透视可能过期/失效），改试下一色")
+        print("透视定向翻未达成结算，回退普通盲翻策略\n")
+
+    # 无透视 fallback：按序翻未翻的牌，统计追色（原策略）
+    for s in state:
+        if s["flipped"]:
+            continue
+        if do_flip(s):
             return
         # 刷新统计
         state = parse_gift()
@@ -1048,9 +1122,15 @@ def gift():
     print("翻牌区已全部翻开但未凑齐同色（异常情况）")
 
 
-def all_daily(no_refresh=False):
+def all_daily(no_refresh=False, bonus=0):
     """一键日常（按 05 §4A 顺序，逐步容错）：
-    addpoint → gem(收菜+开工) → gemup → halo → wish → beach → pk → gift → bonus
+    addpoint → gem(收菜+开工) → gemup → halo → wish → beach → pk → gift
+    ⚠️ 2026-08-26 药水策略（用户决定）：all 默认不执行 bonus（额外奖励），药水不自动消耗。
+    需用时显式带 --bonus1/--bonus2（透传给翻牌步骤 gift(bonus=...)）：
+      --bonus1 → 翻牌后 c=13&id=1 耗 1 药水再领（固定 6000 贝壳+6000 经验）
+      --bonus2 → 翻牌后 c=13&id=2 耗 2 药水重置狗牌+翻牌 → 重新出击 → 再翻一轮
+    理由：bonus 收益固定且低、药水机会成本高（B 段 20 星沙/瓶，1 星沙≈10w 贝壳；
+    重置翻牌 c=13&id=2 需 2 瓶，远期价值更高）。
     no_refresh=True 时沙滩空不自动刷新（不耗随机装备箱，供保留装备箱场景）。
 
     ⚠️ 顺序已知问题（2026-08-20 记录，暂不改）：
@@ -1064,7 +1144,8 @@ def all_daily(no_refresh=False):
              ("光环提升", halo), ("许愿池", wish),
              ("沙滩收取", lambda: beach(allow_refresh=not no_refresh,
                                          wait_after_refresh=False)),
-             ("出击打野", pk), ("翻牌", gift), ("额外奖励", bonus)]
+             ("出击打野", pk), ("翻牌", lambda: gift(bonus=bonus))]
+    # bonus 走 gift(bonus=...) 配置项（2026-08-26 用户设计），默认 0 不耗药水
     for name, fn in steps:
         print(f"\n{'=' * 20} [{name}] {'=' * 20}")
         try:
@@ -1125,11 +1206,14 @@ def main():
         n = int(args[0]) if args else 20
         pk(n, full=full)
     elif cmd == "gift":
-        gift()
+        bonus = 1 if "--bonus1" in sys.argv else (2 if "--bonus2" in sys.argv else 0)
+        gift(bonus=bonus)
     elif cmd == "bonus":
         bonus()
     elif cmd == "all":
-        all_daily(no_refresh="--no-refresh" in sys.argv)
+        no_refresh = "--no-refresh" in sys.argv
+        bonus = 1 if "--bonus1" in sys.argv else (2 if "--bonus2" in sys.argv else 0)
+        all_daily(no_refresh=no_refresh, bonus=bonus)
     else:
         stat()
 
