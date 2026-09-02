@@ -178,6 +178,12 @@ def add_secret(value):
 #                   <300 万 → 按剩余贝壳抽 1-9 次（270 万 = 9 次；每天一次机会不浪费）
 WISH_MODE = "combo"
 
+# ===== 工坊目标成功率配置（2026-08-28）=====
+# 概率型道具（随机装备箱/灵魂药水/宝石原石）面板留档时额外输出
+# "预计 X 分钟（折合小时分钟）到 N%"，N 即此配置，默认 100%。
+# 用途：定时收工——按预计时长安排下次收菜（注意开工 8 小时内不可收工）。
+GEM_TARGET_PCT = 100
+
 # requests.Session：连接池 + keep-alive 复用连接，规避 urllib 每次新建 TLS
 # 握手被服务器限流（SSL 断开/返回空）的问题（2026-08-16 实测，05 文档 §4.5）
 _SESSION = requests.Session()
@@ -334,7 +340,7 @@ def parse_gem_panel(t):
       20.112%概率出产<br>随机装备箱<br>Lv.800 命 (组装中...)<br>银石4<br>每分钟 +0.048%概率
       已开采<br>0星沙(0.3352)<br>Lv.190 默 (挖矿中...)<br>虚石0<br>每分钟 +0.0008星沙
     → 统一按 <br> 切 5 段：[当前值, 道具名, Lv.X 角色 (状态), 宝石N, 每分钟 +Y]
-    返回 [(栏名, 等级, 角色, 宝石数, 效率文本), ...]；解析失败返回 []。
+    返回 [(栏名, 宝石名, 等级, 角色, 宝石数, 效率文本, 当前值文本), ...]；解析失败返回 []。
     """
     rows = []
     blocks = re.findall(r'<div class="alert alert-info[^>]*>(.*?)</div>', t, re.S)
@@ -348,21 +354,57 @@ def parse_gem_panel(t):
         m = re.search(r"Lv\.(\d+)\s*(\S+)", parts[2])
         g = re.search(gem_name + r"(\d+)", parts[3])
         rate = re.sub(r"<[^>]+>", "", parts[4]).strip()
+        cur = re.sub(r"<[^>]+>", "", parts[0]).strip()
         if m and g:
             rows.append((col_name, gem_name, int(m.group(1)), m.group(2),
-                         int(g.group(1)), rate))
+                         int(g.group(1)), rate, cur))
     return rows
 
 
+def gem_eta_text(rate_text, cur_text):
+    """概率型道具：线性外推到 GEM_TARGET_PCT 的预计时长（定时收工用）。
+
+    rate_text 如"每分钟 +0.048%概率"（每分钟增速），cur_text 为面板第 1 段
+    当前值（如"20.112%概率出产"）。概率线性增长 → 剩余分钟 = (目标-当前)/增速。
+    返回如"预计 2083 分钟（34小时43分）到 100%"；非概率型/解析失败返回 ""。
+    已达标返回 ""（无需等待）。
+    """
+    m = re.search(r"\+([\d.]+)%概率", rate_text)
+    if not m:
+        return ""
+    per_min = float(m.group(1))
+    c = re.search(r"([\d.]+)%概率", cur_text)
+    cur = float(c.group(1)) if c else 0.0
+    target = GEM_TARGET_PCT
+    if cur >= target:
+        return ""
+    if per_min <= 0:
+        return f"当前 {cur:g}%（增速 0，无法到 {target:g}%）"
+    total = int(round((target - cur) / per_min))
+    h, mi = divmod(total, 60)
+    txt = f"预计 {total} 分钟（{h}小时{mi:02d}分）到 {target:g}%"
+    if total < 480:
+        txt += "（⚠️ 8 小时内不可收工）"
+    return txt
+
+
 def show_gem_panel(t, title="工坊面板"):
-    """打印工坊面板摘要（各栏角色等级/宝石数/效率），供日志留档与收益核算。"""
+    """打印工坊面板摘要（各栏角色等级/宝石数/效率），供日志留档与收益核算。
+
+    概率型三栏（随机装备箱/灵魂药水/宝石原石）额外输出到 GEM_TARGET_PCT
+    （脚本顶部配置，默认 100%）的预计分钟数与折合小时分钟，用于定时收工安排。
+    """
     rows = parse_gem_panel(t)
     if not rows:
         print(f"[{title}] 解析失败（未加工或格式变化）")
         return
     print(f"[{title}] 加工角色等级/宝石数/效率：")
-    for col, gem_name, lv, char, gems, rate in rows:
-        print(f"  {col}: Lv.{lv} {char} | {gem_name}{gems} | {rate}")
+    for col, gem_name, lv, char, gems, rate, cur in rows:
+        line = f"  {col}: Lv.{lv} {char} | {gem_name}{gems} | {rate}"
+        eta = gem_eta_text(rate, cur)
+        if eta:
+            line += f" | {eta}"
+        print(line)
 
 
 def gem():
@@ -372,6 +414,8 @@ def gem():
     但 8-12 出现过开工状态丢失（隔天变"开始加工"），故收工后检查、未自动开工则手动开工。
     2026-08-27：收工前记录各栏加工角色等级/宝石数/每分钟效率（开工随机换人，
     等级系数决定增长率，留档供收益核算——05 §4.4d 公式）。
+    2026-08-28：概率型三栏额外输出到 GEM_TARGET_PCT（默认 100%）的预计时长
+    （分钟/折合小时分钟），供定时收工安排。
     """
     t = read_block(21)
     if "收工" in t:
@@ -772,7 +816,10 @@ def beach(allow_refresh=True, wait_after_refresh=True):
       2. 会话失效（"请重新登录"）：cookie 被浏览器顶掉时 f=1 返回 9 字符提示，
          旧代码当"空"处理。现在直接 raise 提示重抓 cookie。
       3. 沙滩 id 拾取后重排：逐件拾取后剩余 id 全变，禁止复用旧 id。
-      4. c=12 刷新后空窗期 ~64s：45×2s=90s 重试窗口覆盖。
+      4. ✅ 定论（2026-09-03 澄清）：c=12 后读 f=1 返回空**不存在服务器"空窗期"**，
+         历史"64s/90s/15-21s 空窗"全是误测。两类真实原因：
+         a) 脚本缺浏览器 reload 的整页 GET → 先 GET fyg_beach.php 再读 f=1（见下方）；
+         b) 高频轮询触发 f=1 专属真限流 → 保持低频（读 1 次 + 10s 间隔兜底）。
       5. 限流：momozhen 对连续请求限流（返回空/SSL 断开），requests.Session 已缓解，
          但高频场景仍需间隔 ≥2s。
     """
@@ -800,12 +847,15 @@ def beach(allow_refresh=True, wait_after_refresh=True):
     if not items:
         # 确认是真空（_read_beach 已排除限流/会话失效）
         # ⚠️ 沙滩空 → c=12 自动刷新（2026-08-16 实测改版）。
-        # ⚠️ 2026-08-23 实测纠正空窗期：c=12 后 f=1 空窗期仅 ~15-21 秒
-        #   （探针 +11s 空 / +21s 读到 10 件），非旧记录"64 秒"，更非 90s。
-        #   旧代码 45×2s=90s 密集轮询反而触发 f=1 专属限流（实测：连续读后
-        #   f=6/2/12 正常但 f=1 空，浏览器同 IP 也空）→ 全程读不到。
-        #   ✅ 新策略（浏览器行为一致）：c=12 后先等 15s 空窗期 → 读 1 次；
-        #      失败则 10s 间隔重试（最多 4 次覆盖 15-55s），低频率不触发限流。
+        # ✅ 定论（2026-09-03 澄清，作废"空窗期"说法）：c=12 后立即读 f=1
+        #   返回空，历史上先后被误记为"64s/90s/15-21s 空窗期"，实际**不存在**
+        #   任何服务器空窗期，全是两个可复现原因的误测：
+        #   a) 缺 reload：脚本 c=12 后直接 POST f=1，少了浏览器 reload 的整页
+        #      GET → f=1 返回空（08-24 实测：脚本 55s 全空、浏览器 reload 立即
+        #      有 10 件；补 GET 后第 1 次就读到，08-25 起零失败）；
+        #   b) 真限流：2s 密集轮询 f=1 触发专属限流（08-23 实测：f=6/2/12
+        #      正常但 f=1 连浏览器同 IP 都空）。
+        #   因此策略 = GET-first（治 a）+ 低频重试（防 b），无需任何固定等待。
         print(f"沙滩空，无装备")
         # 若倒计时 ≤15 分钟 → 自然刷新在即，**不耗装备箱**，跳过等自然刷新
         #   （否则 c=12 会重置计时，白耗 1 箱且错过马上要来的自然批次）。
@@ -831,17 +881,21 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             print("→ 用户指定不刷新（--no-refresh），跳过沙滩（保留装备箱）")
             return
         else:
-            print("→ 刚刷新过（allow_refresh=False），等待空窗期过去...")
-        # ⚠️ c=12 后读取策略（2026-08-24 重构）：
+            print("→ 刚刷新过（allow_refresh=False），按 GET-first 策略重读...")
+        # ✅ c=12 后读取铁律（2026-08-24 重构，2026-09-03 定稿）：先 GET 后 POST。
         #   浏览器 gx_sxst() 在 c=12 返回 ok 后执行 window.location.reload()
         #   （整页 GET fyg_beach.php），页面加载时 stall() 再 POST f=1 读装备。
-        #   脚本原先 c=12 后直接 POST f=1，少了 reload 这步 → 服务端可能
-        #   需要一次页面访问确认刷新结果，否则 f=1 在空窗期返回空
-        #   （2026-08-24 实测：c=12 ok 后 55s 内 f=1 全空，但浏览器 reload 立即有装备）。
-        #   ✅ 新策略：c=12 后先 GET fyg_beach.php（模拟 reload）→ 立即读 f=1；
-        #      仍空则 10s 间隔重试兜底（最多 4 次覆盖 0-30s）。
+        #   接口和脚本完全一样（c=12 + f=1），唯一差异就是浏览器多了 reload。
+        #   服务端需要一次页面 GET 确认状态，脚本缺这步 → f=1 返回空
+        #   （08-24 实测：c=12 ok 后脚本 55s 内 f=1 全空，浏览器 reload 立即有装备；
+        #   同日补上 GET 后第 1 次读取即成功，08-25~08-28 连续 4 天零失败）。
+        #   ⚠️ 此规律是普适的，不限于 c=12 后：首次读 f=1 前若从未 GET 过
+        #   fyg_beach.php 也可能空（beach() 开头 get_beach_countdown() 的 GET
+        #   顺带覆盖了首次读取；单独调 _read_beach 的场景需自行保证先 GET）。
+        #   GET 后立即读 1 次；仍空则 10s 间隔重试兜底（最多 4 次覆盖 0-30s），
+        #   兜底针对真限流/服务器延迟，勿改为 2s 密集轮询（会触发 f=1 专属限流）。
         try:
-            request(BASE + "/fyg_beach.php")  # 模拟浏览器 reload，触发服务端状态确认
+            request(BASE + "/fyg_beach.php")  # 模拟浏览器 reload（铁律：先 GET 后 POST f=1）
         except Exception:
             pass  # reload 失败不致命，继续尝试读 f=1
         for attempt in range(4):
@@ -934,7 +988,7 @@ def beach_refresh():
     """[4.5] 强制刷新沙滩（耗 1 随机装备箱，c=12）→ 刷新后按 4.5 规则再筛一轮
 
     ⚠️ 2026-08-16：beach 已恢复自动刷新，这里先 c=12 再调 beach 会二次刷新白耗箱子，
-    故传 allow_refresh=False 让 beach 只等空窗期不重复刷。
+    故传 allow_refresh=False 让 beach 不重复刷（c=12 后由 beach 走 GET-first 读 f=1）。
     """
     boxes = get_items().get("it004", 0)
     print(f"随机装备箱持有: {boxes}")
