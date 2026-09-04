@@ -1065,6 +1065,29 @@ def beach_refresh():
     beach(allow_refresh=False, wait_after_refresh=True)
 
 
+def parse_monster(r):
+    """从战报解析野怪信息: 名字/等级/护盾/生命/天赋。
+
+    2026-09-05 新增: 用于记录野怪池数据（验证"同一时段野怪池是否固定"），
+    并为后续战斗模拟器（calcBattle 公式）提供输入。
+    战报结构: alert-info 区块含 <span class="fyg_f18">营养均衡的史莱姆（野怪 Lv.27）</span>
+    护盾/生命在 label 里, 天赋在 |复合护盾|圣盾祝福|...| 里。
+    非野怪对手（打人）或轮空/上限消息返回 None。
+    """
+    idx = r.find('alert-info')
+    if idx < 0:
+        return None
+    chunk = r[idx:idx + 1000]
+    m = re.search(r'fyg_f18[^>]*>([^<]+)<', chunk)
+    name = m.group(1).strip() if m else '?'
+    m2 = re.search(r'(\d+) 护盾</span>[^>]*>(\d+) 生命', chunk)
+    sld, hp = (m2.group(1), m2.group(2)) if m2 else ('?', '?')
+    # 天赋: |复合护盾||圣盾祝福|...|<br>|午时已到||绝对底线| （跨 <br> 多行, 双竖线是分隔）
+    raw = re.sub(r'<br>', '|', chunk)  # 先把 <br> 换成 | 统一分隔
+    talents = [t.strip() for t in re.findall(r'\|([^|]+)\|', raw) if t.strip()]
+    return {"name": name, "sld": sld, "hp": hp, "talents": talents}
+
+
 def fight(target=1):
     """出击一次，返回 (结果类型, 原始文本)。fyg_v_intel.php 需带 safeid！"""
     r = dec(request(BASE + "/fyg_v_intel.php", {"id": target, "safeid": SAFEID}))
@@ -1113,6 +1136,7 @@ def pk(max_fights=20, full=False):
     """
     global ZID
     # 角色轮换列表（打野平局时切换）: 先试其他角色,最后回到当前
+    # 2026-09-05: 谁打赢用谁——换角色后不切回原角色（避免每天重复换）
     card_order = list(CARD_ZIDS.values())
     switch_seq = [z for z in card_order if z != ZID] + [ZID]  # 先试其他角色,最后回到当前
     switch_idx = 0
@@ -1131,6 +1155,11 @@ def pk(max_fights=20, full=False):
         kind, r = fight(target)
         target_name = "打人" if target == 2 else "打野"
         print(f"出击结果: {kind}（{target_name}）")
+        # 记录野怪信息（2026-09-05: 积累野怪池数据, 验证等级/天赋分布）
+        if target == 1 and kind in ("win", "draw", "lose"):
+            mon = parse_monster(r)
+            if mon:
+                print(f"  野怪: {mon['name']} 盾{mon['sld']} 血{mon['hp']} 天赋{mon['talents']}")
         if kind == "limit":
             print("出击次数达上限")
             break
