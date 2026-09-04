@@ -873,46 +873,32 @@ def parse_equips(html_text, want_id=False):
 # 满足**任一**规则 → 拾取(take), 全部不满足 → 清理(clear)。
 # 修改本配置即改规则, 无需命令行参数。
 #
-# 可用字段（作用于当前沙滩装备 it, 上下文 ctx={worn:身上, store:仓库, beach:沙滩同批}）:
+# 可用字段（作用于当前沙滩装备）:
 #   name        装备名字（字符串, 可 == / != / contains / startswith / endswith）
 #   mystery     是否含神秘词条（布尔, 直接写 mystery / not mystery）
 #   quality     品质等级（数字: 3绿/4橙/5红…, 可 >= > <= < == != 数字）
 #   total       词条总值%（数字, 几个词条百分比之和, 可比较）
-#   orange      是否橙装（total>=516, 布尔）
-#   red_orange  是否含红/橙词条（布尔）
-#   high_affix  是否含高价值词条（布尔）
-#   empty_slot  身上该部位是否空缺（布尔）
-#   beat_worn   词条总值是否高于身上同部位（布尔）
-#   same_name_best  同名装备保留最好（三值: 有同名时最好→True/次品→False,
-#                   无同名→中性 None, 交给其他规则）
 #
 # 比较符: 数字字段 = >= > <= < == != ; 名字字段 = == != contains startswith endswith
 # 字符串值用双引号或单引号包裹:  name=="探险者之剑"  name contains "之剑"
 #
-# ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤** — 沙滩装备存在同名时,
-#   不是其中品质/总值最高的直接清理, 不进入规则判定(即“同名装备只在仓库保留
-#   最好的”)。设为 False 则完全交给规则表达式自由决定。
+# ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤** — 沙滩装备存在同名
+#   （仓库+身上+沙滩同批）时, 不是其中品质/总值最高的直接清理, 不进入规则判定
+#   (即“同名装备只在仓库保留最好的”)。设为 False 则关闭该过滤。
 #
 # 示例（用户自定义）:
 #   BEACH_RULES = [
-#       ("保留最好或神秘3等", "same_name_best or (mystery and quality>=3)"),
+#       ("神秘3等", "mystery and quality>=3"),
 #       ("只留探险者之剑高值", "name=='探险者之剑' and total>=450"),
 #   ]
-#   → 拾取 = 同名最好 或 (神秘 且 3等以上) 或 (指定名且高总值)
+#   → 拾取 = (神秘 且 3等以上) 或 (指定名且高总值)
 
 BEACH_RULES = [
-    # 原规则①②: 橙装 / 神秘 → 无脑收（备其他角色）
-    ("橙装",     "orange"),
+    # 橙装 / 神秘 → 无脑收（备其他角色）
+    ("橙装",     "total>=516"),
     ("神秘",     "mystery"),
-    # 原规则③: 能熔炼 → 收（品质≥3 且 总值≥410%，供手动熔炼，长期规则）
+    # 能熔炼 → 收（品质≥3 且 总值≥410%，供手动熔炼，长期规则）
     ("可熔炼",   "quality>=3 and total>=410"),
-    # 原规则④: 红/橙词条按总值线: 有高价值词条→450，无→500（2026-08-13 用户指定）
-    ("红橙高值", "red_orange and high_affix and total>=450"),
-    ("红橙低值", "red_orange and not high_affix and total>=500"),
-    # 原规则⑤: 优于身上同部位 / 空部位直接收
-    ("优于身上", "empty_slot or beat_worn"),
-    # 新规则(2026-09-05): 同名装备只在仓库保留最好的（品质数字最高）
-    ("同名最好", "same_name_best"),
 ]
 
 # ⭐ 同名硬性过滤（2026-09-05, 默认开）: 同名装备不是最好的 → 直接清理。
@@ -941,21 +927,6 @@ def _f_mystery(it, ctx):
     return it["mystery"]
 
 
-@_f("orange")
-def _f_orange(it, ctx):
-    return it["total"] >= 516
-
-
-@_f("red_orange")
-def _f_red_orange(it, ctx):
-    return it["has_orange"] or it["has_red"]
-
-
-@_f("high_affix")
-def _f_high_affix(it, ctx):
-    return it["has_high"]
-
-
 @_f("quality")
 def _f_quality(it, ctx):
     return it["quality"]
@@ -964,40 +935,6 @@ def _f_quality(it, ctx):
 @_f("total")
 def _f_total(it, ctx):
     return it["total"]
-
-
-@_f("empty_slot")
-def _f_empty_slot(it, ctx):
-    slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
-    return not any(w["icon"][:2] == slot for w in ctx["worn"])
-
-
-@_f("beat_worn")
-def _f_beat_worn(it, ctx):
-    slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
-    same = [w for w in ctx["worn"] if w["icon"][:2] == slot]
-    if not same:
-        return False  # 空部位由 empty_slot 负责，避免两个谓词重复
-    return it["total"] > max(w["total"] for w in same)
-
-
-@_f("same_name_best")
-def _f_same_name_best(it, ctx):
-    """同名装备保留最好（2026-09-05 新增, 三值语义）。
-    有同名(仓库+身上+沙滩同批, 排除自己) → 品质最高才 True, 同品质总值更高才 True,
-    否则 False; **无同名 → None(中性, 不因本规则收也不因本规则清)**。
-    名字解析失败("?")同样返回 None(交给其他规则)。"""
-    if it["name"] == "?":
-        return None
-    rivals = [w for w in ctx["store"] + ctx["worn"] + ctx["beach"]
-              if w["name"] == it["name"] and w is not it]
-    if not rivals:
-        return None  # 无同名 → 中性
-    best_q = max(w["quality"] for w in rivals)
-    best_t = max(w["total"] for w in rivals if w["quality"] == best_q)
-    if it["quality"] > best_q:
-        return True
-    return it["quality"] == best_q and it["total"] > best_t
 
 
 def _same_name_allow(it, ctx):
@@ -1120,7 +1057,8 @@ def _parse_expr(expr):
 
 def _eval_rule(node, it, ctx):
     """三值逻辑求值: True/False/None。None = 中性(该规则不做决定),
-    用于 same_name_best 的“无同名”情形 — or 分支不因 None 收, and 分支不因 None 清。"""
+    为将来可能的"中性字段"保留(如同名比较无同名情形);
+    当前字段(name/mystery/quality/total)均返回 bool/数字/字符串, None 分支不触发。"""
     kind = node[0]
     if kind == "or":
         l = _eval_rule(node[1], it, ctx)
