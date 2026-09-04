@@ -1123,16 +1123,17 @@ _RULE_CACHE = {}
 
 
 def equip_decision(it, worn, store=None, beach_items=None):
-    """沙滩装备决策（规则引擎版, 2026-09-05 重构）。返回 'take' / 'clear'。
+    """沙滩装备决策（规则引擎版, 2026-09-05 重构）。返回 (action, reason)。
 
+    action = 'take' / 'clear'；reason = 命中规则名（take 时）或 None。
     按 BEACH_RULES 逐条求值（可配置, 支持 and/or/not/括号）;
-    任一规则满足 → take; 全部不满足 → clear。
-    单条规则解析/求值失败只跳过该条并告警, 不影响其他规则。
+    任一规则满足 → take（附命中规则名, 供日志展示/用户验证自定义规则）;
+    全部不满足 → clear。单条规则解析/求值失败只跳过该条并告警, 不影响其他规则。
     """
     ctx = {"worn": worn, "store": store or [], "beach": beach_items or []}
     # ⭐ 同名硬性过滤（BEACH_SAME_NAME_BEST=True 时）: 次品同名直接清, 不进规则
     if not _same_name_allow(it, ctx):
-        return "clear"
+        return "clear", "同名硬过滤（沙滩存在更好的同名）"
     for name, expr in BEACH_RULES:
         node = _RULE_CACHE.get(expr)
         if node is None:
@@ -1144,11 +1145,11 @@ def equip_decision(it, worn, store=None, beach_items=None):
                 continue
         try:
             if _eval_rule(node, it, ctx):
-                return "take"
+                return "take", name
         except ValueError as e:
             print(f"  ⚠️ 规则[{name}] 求值失败: {e} → 跳过该规则")
             continue
-    return "clear"
+    return "clear", None
 
 
 def _read_beach(retries=3, interval=3):
@@ -1369,13 +1370,18 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             print(f"      （无词条明细）")
 
     take_ids, clear_count = [], 0
+    print("逐件决策（规则引擎）:")
     for it in items:
         if it["bid"] is None:
             continue
-        if equip_decision(it, worn, store, items) == "take":
+        action, reason = equip_decision(it, worn, store, items)
+        if action == "take":
             take_ids.append(it["bid"])
+            print(f"  ✅ {it['name']} {it['quality']}等 {it['total']:.0f}% → 拾取 [{reason}]")
         else:
             clear_count += 1
+            rsn = f"（{reason}）" if reason else ""
+            print(f"  ➖ {it['name']} {it['quality']}等 {it['total']:.0f}% → 清理{rsn}")
     print(f"决策: 拾取 {len(take_ids)} 件, 清理 {clear_count} 件")
 
     for bid in take_ids:
