@@ -1005,7 +1005,9 @@ def fight(target=1):
     r = dec(request(BASE + "/fyg_v_intel.php", {"id": target, "safeid": SAFEID}))
     if f"{USER} 获得了胜利！" in r:
         return "win", r
-    if "双方同归于尽" in r:
+    # 平局两种文本: 同归于尽 / 100 回合超时强制结束（2026-09-04 实测补上后者，
+    # 之前漏判导致 100 回合平局被误判 unknown，出击空转 20 次）
+    if "双方同归于尽" in r or "本场不计入胜负场次" in r:
         return "draw", r
     if "不计出击次数，请重试" in r:
         return "retry", r
