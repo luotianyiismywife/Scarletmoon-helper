@@ -1,7 +1,7 @@
 # Firefox Nightly 浏览器调试文档
 
 > 用途：记录用 Firefox Nightly + firefox-devtools-mcp 调试咕咕镇/论坛接口的完整流程与注意事项。
-> 最后更新：2026-08-24
+> 最后更新：2026-09-05
 
 ---
 
@@ -10,9 +10,10 @@
 1. **调试脚本默认用 Firefox Nightly，不要用标准版 Firefox。**
    - 标准版（`C:\Program Files\Mozilla Firefox\`）是用户日常浏览器，勿动、勿杀、勿占端口。
    - 所有调试/自动化验证一律启动 Nightly（`C:\Program Files\Firefox Nightly\firefox.exe`）。
-2. **MCP 配置文件位置**：工作区级 `.vscode/mcp.json`，即
-   `c:\Users\HJM\Documents\Scarletmoon-helper\.vscode\mcp.json`（入库同步，.gitignore 中 `.vscode/*` 的例外项）。
-3. MCP 是 `--connect-existing` 模式：**必须先手动启动 Nightly（带 --marionette），MCP 工具才可用**，否则报 `unknown error`（见 §4.2）。
+2. **MCP 配置文件位置（2026-09-05 更新）**：**profile 级** `%APPDATA%\Code\User\profiles\<profile-id>\mcp.json`（原工作区级 `.vscode/mcp.json` 已删除，改用 profile 级）。
+   - 服务器名 `firefox-devtools`（与 ida-pro-mcp 同文件）。
+   - ⚠️ **profile 级配置必须带 `--connect-existing --marionette-port 2828 --browser "C:\Program Files\Firefox Nightly\firefox.exe"`**（2026-09-05 血泪）：否则 MCP **不会连已运行的 Nightly**，而是**静默拉起一个全新标准版 Firefox + 临时 profile（rust_mozprofileXXXX，无登录态）**，导致所有页面"未登录"，极难排查。
+3. MCP 是 `--connect-existing` 模式：**必须先手动启动 Nightly（带 --marionette），MCP 工具才可用**，否则报 `No Marionette listener on 127.0.0.1:2828`（见 §4.2）。
 
 ---
 
@@ -24,7 +25,7 @@
 | 标准版 Firefox | `C:\Program Files\Mozilla Firefox\firefox.exe`（**勿误杀**） |
 | geckodriver | `%LOCALAPPDATA%\Programs\geckodriver\geckodriver.exe` |
 | MCP 服务器 | `@mozilla/firefox-devtools-mcp@latest`（经 npx 运行） |
-| MCP 配置位置 | `.vscode/mcp.json`（工作区级） |
+| MCP 配置位置 | **profile 级** `%APPDATA%\Code\User\profiles\<profile-id>\mcp.json`（2026-09-05 起，原工作区级已删） |
 | 调试端口 | **2828**（Marionette）+ **9222**（BiDi/remote-debugging） |
 | 登录 cookie 位置 | `%APPDATA%\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\cookies.sqlite` |
 
@@ -32,44 +33,50 @@
 
 | Profile 名 | 目录 | cookies 大小 | 归属 |
 |---|---|---|---|
-| `default-nightly` | `30hfbhjk.default-nightly` | 524KB ✅ | Nightly 专用（含咕咕镇登录态） |
+| `default-nightly` | `30hfbhjk.default-nightly` | 524KB ✅ | Nightly 专用 |
 | `default-release` | `4cx9grih.default-release` | 1MB | 标准版 Firefox |
 | `default` | `dt82209w.default` | 0 | 空 profile |
+
+> ⚠️ **咕咕镇 cookie 实测（2026-09-05）**：cookie 有效期约 1 天且会被顶掉，
+> 实测发现 momozhen/guguzhen 的 `fyg2019_*` cookie 在 **标准版 `default-release`** 里，
+> **Nightly 的 `default-nightly` 反而没有** → 调试前先确认 cookie 在哪个 profile，
+> 必要时用 `tools/get_cookies.py --refreshggz` 刷新后再进 Nightly 走入口链登录。
 
 > ⚠️ **Firefox 数据分两地存储**：cookies.sqlite 等会话数据在 **Roaming**（`%APPDATA%`），
 > 而 cache 等在 **Local**（`%LOCALAPPDATA%`）。改 profile 时两处同名目录要一起考虑。
 
 ---
 
-## 2. MCP 配置（.vscode/mcp.json）
+## 2. MCP 配置（profile 级 mcp.json，2026-09-05 起）
+
+> 位置：`%APPDATA%\Code\User\profiles\<profile-id>\mcp.json`（当前 profile `-367578e4`）
+> 原工作区级 `.vscode/mcp.json` 已删除（2026-09-05 提交 610aa6a），避免与 profile 级重复加载。
 
 ```json
 {
   "servers": {
-    "firefox-nightly": {
-      "type": "stdio",
-      "command": "npx.cmd",
+    "firefox-devtools": {
+      "command": "npx",
       "args": [
         "-y",
         "@mozilla/firefox-devtools-mcp@latest",
         "--connect-existing",
         "--marionette-port",
         "2828",
+        "--browser",
+        "C:\\Program Files\\Firefox Nightly\\firefox.exe",
         "--tool-preset",
         "developer"
-      ],
-      "env": {
-        "START_URL": "https://bbs.kfpromax.com/kf_growup.php",
-        "PATH": "%USERPROFILE%\.local\bin;...;%LOCALAPPDATA%\Programs\geckodriver;..."
-      }
+      ]
     }
   }
 }
 ```
 
 **关键参数**：
-- `--connect-existing`：连接**已运行**的 Firefox 实例（所以必须先手动启动 Nightly，否则 MCP 工具报 `unknown error`）
+- `--connect-existing`：连接**已运行**的 Firefox 实例（所以必须先手动启动 Nightly，否则 MCP 工具报 `No Marionette listener on 127.0.0.1:2828`）
 - `--marionette-port 2828`：指定 Marionette 端口
+- `--browser`：**必须显式指定 Nightly 路径**（2026-09-05 血泪）——不加 `--connect-existing` 时 MCP 会默认拉起标准版 Firefox + 临时 profile
 - `env.PATH`：必须包含 geckodriver 所在目录，否则找不到驱动
 
 ---
@@ -160,7 +167,10 @@ Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" `
 ### 4.4 标准版与 Nightly 是不同 profile
 
 - 标准版用 `default-release`，Nightly 用 `default-nightly`，**互不干扰**
-- 咕咕镇/论坛登录态存在 **Nightly 的 `default-nightly` profile**（cookies.sqlite 524KB）
+- ⚠️ **咕咕镇登录态位置（2026-09-05 实测修正）**：cookie 有效期约 1 天会被顶掉/过期，
+  实测当前 momozhen/guguzhen 的 `fyg2019_*` cookie 在**标准版 `default-release`**，
+  Nightly 的 `default-nightly` 反而没有 → 调试前先确认 cookie 在哪个 profile，
+  必要时 `tools/get_cookies.py --refreshggz` 刷新后，进 Nightly 走入口链重新登录
 - 想在标准版看同一登录态 → 得手动登录一遍
 
 ### 4.5 PATH 环境变量
@@ -256,3 +266,49 @@ Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" | Select ProcessId,Co
 # 看锁文件
 Get-ChildItem "$env:APPDATA\Mozilla\Firefox\Profiles\30hfbhjk.default-nightly\" -Force | Where-Object Name -match 'lock|parent'
 ```
+---
+
+## 8. ⚠️ "disabled by the user" 排查记录（2026-09-05 实战）⭐
+
+### 8.1 症状
+
+Copilot Chat 调用 Firefox MCP 工具时，有时报 `Tool is currently disabled by the user`，
+**但**：
+- `mcpToolCache`（state.vscdb）显示所有工具 `visibility: 3`（已启用），无禁用标记
+- 服务器日志（`mcpServer.mcp.config.usrlocal.firefox-devtools.log`）显示工具**确实执行过**（`Executing tool: list_pages`）
+- 同一工具几分钟内时好时坏
+
+### 8.2 根因链（三重叠加）
+
+```
+1. 服务器 ID 冲突：同底层 MCP 存在两个 ID
+   - mcp.config.ws0.firefox-nightly      ← 工作区级残留（配置已删但缓存还在）
+   - mcp.config.usrlocal.firefox-devtools ← profile 级（现行）
+   → Copilot 会话绑定到残留旧 ID，授权状态与运行时脱节
+
+2. 多窗口状态各自独立：window1-4 各自加载 MCP、各自维护工具状态
+   → 会话所在窗口与实际连 Nightly 的窗口可能不是同一个
+
+3. 会话工具快照过期：会话启动时拍快照，期间 MCP 更新（v0.10.2，工具 45→48）
+   → 部分工具在新旧状态间悬空
+```
+
+### 8.3 结论
+
+- **这是 VS Code/Copilot 的 bug**（不是 firefox-devtools-mcp 的）：工具授权缓存显示启用、服务器日志显示执行成功，但 Copilot 侧权限检查却拦截为 disabled。
+- 已提交 issue：**microsoft/vscode #334569**
+  https://github.com/microsoft/vscode/issues/334569
+- 相关 issue：#319541（Agents 窗口 "No MCP client found for tool ID"，症状不同但可能同源）
+
+### 8.4 绕过方法
+
+- **reload window 不够**（清不掉多窗口残留绑定）
+- **必须关闭所有 VS Code 窗口**（不只本工作区），只开一个窗口重新会话
+- 会话启动时重新抓取工具快照 → 状态重建 → 恢复正常
+
+### 8.5 防再犯清单
+
+- [ ] 工作区级 `.vscode/mcp.json` 已删除（提交 610aa6a），避免双 ID 冲突
+- [ ] profile 级 mcp.json 必须带 `--connect-existing --marionette-port 2828 --browser <Nightly路径>`
+- [ ] 调试前先确认咕咕镇 cookie 在哪个 profile（cookie 有效期约 1 天，可能已被顶掉/过期）
+- [ ] 多窗口场景下，MCP 工具异常先怀疑"会话绑错窗口"，全关重开而非 reload

@@ -68,6 +68,8 @@ class Tee:
     日志文件可上传；logs/ 已取消 gitignore 入库）。
     2026-08-24：日志流额外做路径脱敏（PROJECT_ROOT→"."、USER_HOME→"~"），
     Python traceback 里的本机绝对路径不再出现在日志中。
+    2026-09-05：write 后立即 flush 文件流（跑一点写一点，避免块缓冲
+    导致日志一次性落盘；中途崩溃也能看到已跑部分）。
     """
 
     def __init__(self, *streams):
@@ -83,6 +85,9 @@ class Tee:
                     data = data.replace(PROJECT_ROOT, ".")
                     data = data.replace(USER_HOME, "~")
                 s.write(data)
+                # 仅文件流立即落盘（终端行缓冲自带，无需手动 flush；2026-09-05）
+                if s not in (sys.__stdout__, sys.__stderr__):
+                    s.flush()
             except Exception:
                 pass
 
@@ -101,7 +106,8 @@ def setup_logging():
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "ggz_%s.log" % datetime.date.today().strftime("%Y%m%d"))
-    log_fp = open(log_path, "a", encoding="utf-8")
+    # buffering=1 行缓冲 + Tee.write 内 flush → 跑一点写一点（2026-09-05）
+    log_fp = open(log_path, "a", encoding="utf-8", buffering=1)
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_fp.write("\n" + "=" * 60 + "\n" + f"[{ts}] 新会话开始\n" + "=" * 60 + "\n")
     log_fp.flush()
@@ -257,8 +263,67 @@ def get_user_and_safeid():
 def get_active_zid():
     """f=8 角色卡列表: 找出战中的角色 zid（含 '(出战中)' 标记）"""
     t = read_block(8)
-    m = re.search(r"xxcard\((\d+)\)[^>]*>.*?\((出战中)\)", t, re.S)
+    # 按卡块解析: xxcard(zid) ... (出战中)（2026-09-05 修复: 旧贪婪正则会匹配到第一张卡）
+    m = re.search(r"xxcard\((\d+)\)[^>]*>(?:(?!xxcard).)*?\((出战中)\)", t, re.S)
     return int(m.group(1)) if m else None
+
+
+# 角色 zid 映射（2026-09-05 浏览器实测：舞=3000、绮=3012；3011 空缺=雅占位，
+# 未持有雅不显示；其余按 f=8 返回动态获取）
+CARD_ZIDS = {
+    "舞": 3000, "默": 3001, "琳": 3002, "艾": 3003, "梦": 3004, "薇": 3005,
+    "伊": 3006, "冥": 3007, "命": 3008, "希": 3009, "霞": 3010, "绮": 3012,
+}
+
+
+def list_cards():
+    """f=8 角色卡列表: 返回 {角色名: zid}（动态解析，不依赖写死的 CARD_ZIDS）"""
+    t = read_block(8)
+    cards = {}
+    # 每张卡: onclick="xxcard(3000)" ... 卡名 ... (出战中)
+    for m in re.finditer(r'xxcard\((\d+)\)[^>]*>(?:(?!xxcard).)*?<[^>]*>([^<]{1,4})</', t, re.S):
+        zid, name = int(m.group(1)), m.group(2).strip()
+        if name and not name.isdigit():
+            cards[name] = zid
+    return cards
+
+
+def switch_card(zid=None, name=None):
+    """[5.5] 切换出战角色（c=5 upcard）。传 zid 或角色名均可；不带参则列出所有角色。
+
+    ⚠️ 切卡后出击/加点/装备都跟着切（07 文档 §4：角色卡等级/加点/装备独立），
+    切卡前确认目标卡已加点且装备可打（2026-09-05：绮与舞属性点相同可试打野）。
+    """
+    global ZID
+    if not zid and name:
+        cards = list_cards()
+        if name not in cards:
+            print(f"❌ 角色 '{name}' 不存在，可用: {list(cards.keys())}")
+            return None
+        zid = cards[name]
+    if not zid:
+        cards = list_cards()
+        print("可用角色卡:")
+        for n, z in cards.items():
+            mark = " (出战中)" if z == ZID else ""
+            print(f"  {n} zid={z}{mark}")
+        return None
+
+    cur = get_active_zid()
+    if cur == zid:
+        name = name or [n for n, z in (list_cards() or {}).items() if z == zid]
+        print(f"已是出战角色 {name}")
+        return zid
+
+    r = click(5, id=zid)
+    msg = strip_tags(r)[:60]
+    print(f"c=5 切卡 zid={zid}: {msg}")
+    if "ok" in r or "装备成功" in r:
+        ZID = zid
+        print(f"✅ 出战角色已切换 zid={zid}")
+        return zid
+    print("⚠️ 切卡返回异常:", r[:120])
+    return None
 
 
 def read_block(f, **params):
@@ -1040,10 +1105,19 @@ def pk(max_fights=20, full=False):
 
     策略（2026-08-17 用户改版）：**优先打人**（id=2，胜利 +3% 进度），
     打不过（lose）或轮空（retry）再切打野（id=1，胜利 +1%）。
-    打野失败 → 切回打人继续循环，直到拿满 3 狗牌或打满 max_fights 次
-    （不再"打野失败即停止"——2026-08-16 旧策略已废弃，用户指定
-     目标 = 3 狗牌或 20 次）。
+    打野失败 → 切回打人继续循环，直到拿满 3 狗牌或打满 max_fights 次。
+
+    打野平局（2026-09-05 用户改版）：平局=100 回合打不死，说明当前角色
+    打不过这只怪 → **自动切换出战角色，从打人重新开始**（避免空转 20 次）。
+    角色按 CARD_ZIDS 顺序轮换，全部试完仍平局则停止。
     """
+    global ZID
+    # 角色轮换列表（打野平局时切换）: 先试其他角色,最后回到当前
+    card_order = list(CARD_ZIDS.values())
+    switch_seq = [z for z in card_order if z != ZID] + [ZID]  # 先试其他角色,最后回到当前
+    switch_idx = 0
+    draw_count = 0
+
     # 当前模式: pvp(打人) / pve(打野)。开局先试打人。
     mode = "pvp"
     for i in range(1, max_fights + 1):
@@ -1061,10 +1135,26 @@ def pk(max_fights=20, full=False):
             print("出击次数达上限")
             break
         if kind == "retry" or kind == "draw":
-            # 不计次数。打人轮空/平局 → 切打野; 打野轮空/平局 → 保持(继续试)
+            # 不计次数。打人轮空/平局 → 切打野; 打野平局 → 换角色重来（从打人开始）
             if target == 2:
                 print("  ↪ 打人轮空/平局，切打野")
                 mode = "pve"
+            elif kind == "draw":
+                # 打野平局: 100 回合打不死 → 换角色重来（从打人开始）
+                draw_count += 1
+                print(f"  ↪ 打野平局（第 {draw_count} 次）→ 换角色重来")
+                if switch_idx >= len(switch_seq):
+                    print("  ⛔ 所有角色都试过了，仍打不过，停止")
+                    break
+                new_zid = switch_seq[switch_idx]
+                switch_idx += 1
+                print(f"  🔄 切换出战角色 → zid={new_zid}")
+                r = click(5, id=new_zid)
+                if "ok" not in r and "装备成功" not in r:
+                    print(f"  ⚠️ 切卡失败: {strip_tags(r)[:60]}")
+                    continue
+                ZID = new_zid
+                mode = "pvp"  # 从打人重新开始
             continue
         if kind == "lose":
             if target == 2:
@@ -1314,6 +1404,15 @@ def main():
         args = [a for a in sys.argv[2:] if not a.startswith("--")]
         n = int(args[0]) if args else 20
         pk(n, full=full)
+    elif cmd == "switch":
+        # 切卡: switch 绮 / switch 3012 / switch（列出所有角色）
+        args = [a for a in sys.argv[2:] if not a.startswith("--")]
+        if args:
+            arg = args[0]
+            switch_card(zid=int(arg) if arg.isdigit() else None,
+                        name=arg if not arg.isdigit() else None)
+        else:
+            switch_card()
     elif cmd == "gift":
         bonus = 1 if "--bonus1" in sys.argv else (2 if "--bonus2" in sys.argv else 0)
         gift(bonus=bonus)
