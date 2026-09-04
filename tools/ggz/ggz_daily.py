@@ -1268,13 +1268,22 @@ def pk(max_fights=20, full=False):
     for i in range(1, max_fights + 1):
         st = parse_pk()
         print(f"\n--- 出击 #{i} 前状态: 段位{st['段位']} {st['进度']} 狗牌{st['狗牌']}/{st['出击']} 连胜{st['连胜']} 连败{st['连败']} 模式={mode} ---")
-        # ⚠️ 限流容错: read_block(12) 返回空时 parse_pk 全 "?"，int() 会崩
-        # 整个 pk 步骤（2026-09-05 修复）；解析失败按 0 狗牌继续打，不中断
-        try:
-            dogs = int(st["狗牌"])
-        except (TypeError, ValueError):
-            dogs = 0
-            print("  ⚠️ 狗牌数解析失败（疑似限流），按 0 处理继续")
+        # ⚠️ 狗牌数是服务器端状态, 限流只是暂时读不到, 不是没有（2026-09-05 修正）:
+        # 解析失败 → 短间隔重读（限流多为瞬时, 恢复后就能读到真实值）;
+        # 重试仍失败 → 保守停止, 绝不假设 0（假设 0 会在已满 3 狗牌时
+        # 继续盲打, 白白浪费出击次数）
+        dogs = None
+        for attempt in range(4):
+            try:
+                dogs = int(st["狗牌"])
+                break
+            except (TypeError, ValueError):
+                print(f"  ⚠️ 狗牌数解析失败（第 {attempt + 1}/4 次, 疑似限流）, 1s 后重读...")
+                time.sleep(1)
+                st = parse_pk()
+        if dogs is None:
+            print("  ⛔ 战场状态连续读取失败（限流）, 停止出击, 稍后重跑")
+            break
         if not full and dogs >= 3:
             print("✅ 已拿满 3 狗牌，停止出击（--full 可打满）")
             break
