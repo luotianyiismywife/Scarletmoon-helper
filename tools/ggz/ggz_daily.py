@@ -868,42 +868,326 @@ def parse_equips(html_text, want_id=False):
     return result
 
 
-def equip_decision(it, worn):
-    """沙滩装备决策（05 §4.5 规则，2026-08-13 更新）。返回 'take' / 'clear'。
+# ═══════════════ 沙滩拾取规则引擎（2026-09-05 重构）═══════════════
+# BEACH_RULES 为**用户自定义配置**: 每条 = (名称, 表达式)。
+# 表达式 = 谓词 + and / or / not / 括号, 满足**任一**规则 → 拾取(take),
+# 全部不满足 → 清理(clear)。修改本配置即改规则, 无需命令行参数。
+#
+# 可用谓词（作用于当前沙滩装备 it, 上下文 ctx={worn:身上, store:仓库, beach:沙滩同批}）:
+#   mystery          含神秘词条
+#   orange           橙装(词条总值≥516%)
+#   red_orange       含红或橙词条
+#   high_affix       含高价值词条(生命偷取/附加物伤/附加魔伤/附加物穿/附加魔穿/
+#                    技能概率/暴击概率/攻击速度)
+#   empty_slot       身上该部位空缺
+#   beat_worn        词条总值高于身上同部位任何一件
+#   same_name_best   同名装备保留最好: 有同名(仓库+身上+沙滩同批)时, 品质数字(3绿/4橙/5红)
+#                    最高才收, 品质相同则总值更高才收; **无同名 → 中性**(不因本规则
+#                    收也不因本规则清, 交给其他规则决定)
+#   数值谓词          quality / total / n_affix, 可接 >= > <= < == != 数字,
+#                    如 quality>=3  (品质≥3等)、total>=410 (总值≥410%)
+#
+# ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤** — 沙滩装备存在同名时,
+#   不是其中品质/总值最高的直接清理, 不进入规则判定(即“同名装备只在仓库保留
+#   最好的”)。设为 False 则完全交给规则表达式自由决定。
+#
+# 示例（用户自定义）:
+#   BEACH_RULES = [
+#       ("保留最好或神秘3等", "same_name_best or (mystery and quality>=3)"),
+#   ]
+#   → 拾取 = 同名最好 或 (神秘 且 3等以上)
 
-    收取条件（并集，满足任一即收）：
-      ① 橙装（总值≥516%）→ 无脑收（备其他角色）
-      ② 含神秘 → 必收
-      ③ 能熔炼（品质≥3 且总值≥410% 且无神秘 且非橙装）→ 收（供手动熔炼，长期规则）
-      ④ 红/橙词条(bg-danger/bg-warning)：
-         含高价值词条 → 四词条总数≥450% 无脑收
-         无高价值词条 → 四词条总数≥500% 无脑收
-      ⑤ 同部位对比：沙滩总值 > 身上同部位 → 收；无同部位（空部位）→ 收
-      ⑥ 其余 → 清
-    """
-    # ① 橙装
-    if it["total"] >= 516:
-        return "take"
-    # ② 神秘
-    if it["mystery"]:
-        return "take"
-    # ③ 能熔炼：品质≥3 且 总值≥410%（熔炼线 2026-08-10 实测），留供手动熔炼
-    if it["quality"] >= 3 and it["total"] >= 410:
-        return "take"
-    # ④ 红/橙词条：有高价值→450，无高价值→500（2026-08-13 用户指定）
-    if it["has_orange"] or it["has_red"]:
-        threshold = 450 if it["has_high"] else 500
-        if it["total"] >= threshold:
-            return "take"
-    # ⑤ 同部位对比：icon 数字前 2 位 = 部位类（21武器/22手环/23衣服/24饰品）
-    # ⚠️ 2026-08-16 实测修复：旧代码 icon[:3] 把武器内部子类(2101/2111)当不同部位，
-    #    导致 211x 武器 vs 身上 210x 武器误判“空部位”→ 白板/蓝装武器全入仓。
+BEACH_RULES = [
+    # 原规则①②: 橙装 / 神秘 → 无脑收（备其他角色）
+    ("橙装",     "orange"),
+    ("神秘",     "mystery"),
+    # 原规则③: 能熔炼 → 收（品质≥3 且 总值≥410%，供手动熔炼，长期规则）
+    ("可熔炼",   "quality>=3 and total>=410"),
+    # 原规则④: 红/橙词条按总值线: 有高价值词条→450，无→500（2026-08-13 用户指定）
+    ("红橙高值", "red_orange and high_affix and total>=450"),
+    ("红橙低值", "red_orange and not high_affix and total>=500"),
+    # 原规则⑤: 优于身上同部位 / 空部位直接收
+    ("优于身上", "empty_slot or beat_worn"),
+    # 新规则(2026-09-05): 同名装备只在仓库保留最好的（品质数字最高）
+    ("同名最好", "same_name_best"),
+]
+
+# ⭐ 同名硬性过滤（2026-09-05, 默认开）: 同名装备不是最好的 → 直接清理。
+# 开着 = 仓库同名只留一件最好的(品质最高, 同品质留总值最高);
+# 关掉 = 同名完全交给 BEACH_RULES 表达式决定。
+BEACH_SAME_NAME_BEST = True
+
+# 谓词注册表: 名称 → 函数(it, ctx) → bool 或数值(供数值比较)
+RULE_PREDICATES = {}
+
+
+def _p(name):
+    def deco(fn):
+        RULE_PREDICATES[name] = fn
+        return fn
+    return deco
+
+
+@_p("mystery")
+def _p_mystery(it, ctx):
+    return it["mystery"]
+
+
+@_p("orange")
+def _p_orange(it, ctx):
+    return it["total"] >= 516
+
+
+@_p("red_orange")
+def _p_red_orange(it, ctx):
+    return it["has_orange"] or it["has_red"]
+
+
+@_p("high_affix")
+def _p_high_affix(it, ctx):
+    return it["has_high"]
+
+
+@_p("quality")
+def _p_quality(it, ctx):
+    return it["quality"]
+
+
+@_p("total")
+def _p_total(it, ctx):
+    return it["total"]
+
+
+@_p("n_affix")
+def _p_n_affix(it, ctx):
+    return it["n_affix"]
+
+
+@_p("empty_slot")
+def _p_empty_slot(it, ctx):
     slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
-    same = [w for w in worn if w["icon"][:2] == slot]
+    return not any(w["icon"][:2] == slot for w in ctx["worn"])
+
+
+@_p("beat_worn")
+def _p_beat_worn(it, ctx):
+    slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
+    same = [w for w in ctx["worn"] if w["icon"][:2] == slot]
     if not same:
-        return "take"  # 空部位直接收
-    best = max(w["total"] for w in same)
-    return "take" if it["total"] > best else "clear"
+        return False  # 空部位由 empty_slot 负责，避免两个谓词重复
+    return it["total"] > max(w["total"] for w in same)
+
+
+@_p("same_name_best")
+def _p_same_name_best(it, ctx):
+    """同名装备保留最好（2026-09-05 新增, 三值语义）。
+    有同名(仓库+身上+沙滩同批, 排除自己) → 品质最高才 True, 同品质总值更高才 True,
+    否则 False; **无同名 → None(中性, 不因本规则收也不因本规则清)**。
+    名字解析失败("?")同样返回 None(交给其他规则)。"""
+    if it["name"] == "?":
+        return None
+    rivals = [w for w in ctx["store"] + ctx["worn"] + ctx["beach"]
+              if w["name"] == it["name"] and w is not it]
+    if not rivals:
+        return None  # 无同名 → 中性
+    best_q = max(w["quality"] for w in rivals)
+    best_t = max(w["total"] for w in rivals if w["quality"] == best_q)
+    if it["quality"] > best_q:
+        return True
+    return it["quality"] == best_q and it["total"] > best_t
+
+
+def _same_name_allow(it, ctx):
+    """同名硬性过滤: 返回 True=允许进入规则判定 / False=次品同名直接清。
+    BEACH_SAME_NAME_BEST=False 时恒 True(不过滤)。"""
+    if not BEACH_SAME_NAME_BEST or it["name"] == "?":
+        return True
+    rivals = [w for w in ctx["store"] + ctx["worn"] + ctx["beach"]
+              if w["name"] == it["name"] and w is not it]
+    if not rivals:
+        return True
+    best_q = max(w["quality"] for w in rivals)
+    best_t = max(w["total"] for w in rivals if w["quality"] == best_q)
+    if it["quality"] > best_q:
+        return True
+    return it["quality"] == best_q and it["total"] > best_t
+
+
+# ---------- 表达式解析器（递归下降, 支持 and/or/not/括号/数值比较） ----------
+
+def _tokenize(expr):
+    tokens = []
+    i, n = 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if c in " \t":
+            i += 1
+            continue
+        if expr.startswith("and", i) and not expr[i + 3:i + 4].isalnum():
+            tokens.append(("op", "and")); i += 3; continue
+        if expr.startswith("or", i) and not expr[i + 2:i + 3].isalnum():
+            tokens.append(("op", "or")); i += 2; continue
+        if expr.startswith("not", i) and not expr[i + 3:i + 4].isalnum():
+            tokens.append(("op", "not")); i += 3; continue
+        if c == "(":
+            tokens.append(("op", "(")); i += 1; continue
+        if c == ")":
+            tokens.append(("op", ")")); i += 1; continue
+        m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", expr[i:])
+        if not m:
+            raise ValueError(f"无法解析位置 {i}: {expr[i:i + 10]!r}")
+        name = m.group(0)
+        i += len(name)
+        cmp_op = cmp_val = None
+        m2 = re.match(r"(>=|<=|==|!=|>|<)\s*(\d+)", expr[i:])
+        if m2:
+            cmp_op, cmp_val = m2.group(1), int(m2.group(2))
+            i += len(m2.group(0))
+        tokens.append(("pred", name, cmp_op, cmp_val))
+    return tokens
+
+
+class _RuleParser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self):
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def next(self):
+        t = self.peek()
+        self.pos += 1
+        return t
+
+    def parse(self):
+        node = self.parse_or()
+        if self.peek():
+            raise ValueError("表达式末尾有多余内容")
+        return node
+
+    def parse_or(self):
+        node = self.parse_and()
+        while self.peek() and self.peek()[1] == "or":
+            self.next()
+            node = ("or", node, self.parse_and())
+        return node
+
+    def parse_and(self):
+        node = self.parse_not()
+        while self.peek() and self.peek()[1] == "and":
+            self.next()
+            node = ("and", node, self.parse_not())
+        return node
+
+    def parse_not(self):
+        if self.peek() and self.peek()[1] == "not":
+            self.next()
+            return ("not", self.parse_not())
+        return self.parse_atom()
+
+    def parse_atom(self):
+        t = self.next()
+        if t is None:
+            raise ValueError("表达式不完整（缺谓词）")
+        if t[1] == "(":
+            node = self.parse_or()
+            nxt = self.next()
+            if not nxt or nxt[1] != ")":
+                raise ValueError("括号不匹配")
+            return node
+        if t[0] == "pred":
+            return ("pred", t[2], t[3], t[1])
+        raise ValueError(f"意外的 token: {t[1]!r}")
+
+
+def _parse_expr(expr):
+    return _RuleParser(_tokenize(expr)).parse()
+
+
+def _eval_rule(node, it, ctx):
+    """三值逻辑求值: True/False/None。None = 中性(该规则不做决定),
+    用于 same_name_best 的“无同名”情形 — or 分支不因 None 收, and 分支不因 None 清。"""
+    kind = node[0]
+    if kind == "or":
+        l = _eval_rule(node[1], it, ctx)
+        if l is True:
+            return True
+        r = _eval_rule(node[2], it, ctx)
+        if r is True:
+            return True
+        if l is None or r is None:
+            return None
+        return False
+    if kind == "and":
+        l = _eval_rule(node[1], it, ctx)
+        if l is False:
+            return False
+        r = _eval_rule(node[2], it, ctx)
+        if r is False:
+            return False
+        if l is None or r is None:
+            return None
+        return True
+    if kind == "not":
+        v = _eval_rule(node[1], it, ctx)
+        return None if v is None else (not v)
+    # ("pred", cmp_op, cmp_val, name)
+    _, cmp_op, cmp_val, name = node
+    pred = RULE_PREDICATES.get(name)
+    if pred is None:
+        raise ValueError(f"未知谓词: {name!r}（可用: {', '.join(sorted(RULE_PREDICATES))}）")
+    val = pred(it, ctx)
+    if cmp_op is None:
+        return bool(val) if val is not None else None
+    if val is None or isinstance(val, bool):
+        raise ValueError(f"谓词 {name} 无法做数值比较 {cmp_op}{cmp_val}")
+    if cmp_op == ">=":
+        return val >= cmp_val
+    if cmp_op == "<=":
+        return val <= cmp_val
+    if cmp_op == ">":
+        return val > cmp_val
+    if cmp_op == "<":
+        return val < cmp_val
+    if cmp_op == "==":
+        return val == cmp_val
+    if cmp_op == "!=":
+        return val != cmp_val
+    raise ValueError(f"未知比较符 {cmp_op}")
+
+
+# 表达式编译缓存（每条规则只解析一次）
+_RULE_CACHE = {}
+
+
+def equip_decision(it, worn, store=None, beach_items=None):
+    """沙滩装备决策（规则引擎版, 2026-09-05 重构）。返回 'take' / 'clear'。
+
+    按 BEACH_RULES 逐条求值（可配置, 支持 and/or/not/括号）;
+    任一规则满足 → take; 全部不满足 → clear。
+    单条规则解析/求值失败只跳过该条并告警, 不影响其他规则。
+    """
+    ctx = {"worn": worn, "store": store or [], "beach": beach_items or []}
+    # ⭐ 同名硬性过滤（BEACH_SAME_NAME_BEST=True 时）: 次品同名直接清, 不进规则
+    if not _same_name_allow(it, ctx):
+        return "clear"
+    for name, expr in BEACH_RULES:
+        node = _RULE_CACHE.get(expr)
+        if node is None:
+            try:
+                node = _parse_expr(expr)
+                _RULE_CACHE[expr] = node
+            except ValueError as e:
+                print(f"  ⚠️ 规则[{name}] 表达式解析失败: {e} → 跳过该规则")
+                continue
+        try:
+            if _eval_rule(node, it, ctx):
+                return "take"
+        except ValueError as e:
+            print(f"  ⚠️ 规则[{name}] 求值失败: {e} → 跳过该规则")
+            continue
+    return "clear"
 
 
 def _read_beach(retries=3, interval=3):
@@ -1097,7 +1381,14 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             print("  ⚠️ 刷新后 30s 仍未读到装备（可能服务器延迟，可稍后重跑 beach）")
             return
     worn = parse_equips(read_block(6))
-    print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件")
+    # 仓库读取（2026-09-05: 同名保留最好规则需要仓库数据）;
+    # 读取失败(限流)只告警, 不中断 — 同名规则退化为仅对比身上+沙滩同批
+    store = []
+    try:
+        store = parse_equips(read_block(2))
+    except Exception as e:
+        print(f"  ⚠️ 仓库读取失败（同名规则可能不准确）: {e}")
+    print(f"沙滩 {len(items)} 件，身上 {len(worn)} 件，仓库 {len(store)} 件")
     for it in items:
         mark = []
         if it["has_orange"]:
@@ -1120,7 +1411,7 @@ def beach(allow_refresh=True, wait_after_refresh=True):
     for it in items:
         if it["bid"] is None:
             continue
-        if equip_decision(it, worn) == "take":
+        if equip_decision(it, worn, store, items) == "take":
             take_ids.append(it["bid"])
         else:
             clear_count += 1
