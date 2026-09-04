@@ -870,22 +870,26 @@ def parse_equips(html_text, want_id=False):
 
 # ═══════════════ 沙滩拾取规则引擎（2026-09-05 重构）═══════════════
 # BEACH_RULES 为**用户自定义配置**: 每条 = (名称, 表达式)。
-# 表达式 = 谓词 + and / or / not / 括号, 满足**任一**规则 → 拾取(take),
-# 全部不满足 → 清理(clear)。修改本配置即改规则, 无需命令行参数。
+# 表达式 = **字段 + 比较符 + 值**, 用 and / or / not / 括号组装。
+# 满足**任一**规则 → 拾取(take), 全部不满足 → 清理(clear)。
+# 修改本配置即改规则, 无需命令行参数。
 #
-# 可用谓词（作用于当前沙滩装备 it, 上下文 ctx={worn:身上, store:仓库, beach:沙滩同批}）:
-#   mystery          含神秘词条
-#   orange           橙装(词条总值≥516%)
-#   red_orange       含红或橙词条
-#   high_affix       含高价值词条(生命偷取/附加物伤/附加魔伤/附加物穿/附加魔穿/
-#                    技能概率/暴击概率/攻击速度)
-#   empty_slot       身上该部位空缺
-#   beat_worn        词条总值高于身上同部位任何一件
-#   same_name_best   同名装备保留最好: 有同名(仓库+身上+沙滩同批)时, 品质数字(3绿/4橙/5红)
-#                    最高才收, 品质相同则总值更高才收; **无同名 → 中性**(不因本规则
-#                    收也不因本规则清, 交给其他规则决定)
-#   数值谓词          quality / total / n_affix, 可接 >= > <= < == != 数字,
-#                    如 quality>=3  (品质≥3等)、total>=410 (总值≥410%)
+# 可用字段（作用于当前沙滩装备 it, 上下文 ctx={worn:身上, store:仓库, beach:沙滩同批}）:
+#   name        装备名字（字符串, 可 == / != / contains / startswith / endswith）
+#   mystery     是否含神秘词条（布尔, 直接写 mystery / not mystery）
+#   quality     品质等级（数字: 3绿/4橙/5红…, 可 >= > <= < == != 数字）
+#   total       词条总值%（数字, 几个词条百分比之和, 可比较）
+#   n_affix     词条数量（数字）
+#   orange      是否橙装（total>=516, 布尔）
+#   red_orange  是否含红/橙词条（布尔）
+#   high_affix  是否含高价值词条（布尔）
+#   empty_slot  身上该部位是否空缺（布尔）
+#   beat_worn   词条总值是否高于身上同部位（布尔）
+#   same_name_best  同名装备保留最好（三值: 有同名时最好→True/次品→False,
+#                   无同名→中性 None, 交给其他规则）
+#
+# 比较符: 数字字段 = >= > <= < == != ; 名字字段 = == != contains startswith endswith
+# 字符串值用双引号或单引号包裹:  name=="探险者之剑"  name contains "之剑"
 #
 # ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤** — 沙滩装备存在同名时,
 #   不是其中品质/总值最高的直接清理, 不进入规则判定(即“同名装备只在仓库保留
@@ -894,8 +898,9 @@ def parse_equips(html_text, want_id=False):
 # 示例（用户自定义）:
 #   BEACH_RULES = [
 #       ("保留最好或神秘3等", "same_name_best or (mystery and quality>=3)"),
+#       ("只留探险者之剑高值", "name=='探险者之剑' and total>=450"),
 #   ]
-#   → 拾取 = 同名最好 或 (神秘 且 3等以上)
+#   → 拾取 = 同名最好 或 (神秘 且 3等以上) 或 (指定名且高总值)
 
 BEACH_RULES = [
     # 原规则①②: 橙装 / 神秘 → 无脑收（备其他角色）
@@ -917,60 +922,65 @@ BEACH_RULES = [
 # 关掉 = 同名完全交给 BEACH_RULES 表达式决定。
 BEACH_SAME_NAME_BEST = True
 
-# 谓词注册表: 名称 → 函数(it, ctx) → bool 或数值(供数值比较)
-RULE_PREDICATES = {}
+# 字段注册表: 名称 → 函数(it, ctx) → 值(数字/字符串/布尔/None)
+RULE_FIELDS = {}
 
 
-def _p(name):
+def _f(name):
     def deco(fn):
-        RULE_PREDICATES[name] = fn
+        RULE_FIELDS[name] = fn
         return fn
     return deco
 
 
-@_p("mystery")
-def _p_mystery(it, ctx):
+@_f("name")
+def _f_name(it, ctx):
+    return it["name"]
+
+
+@_f("mystery")
+def _f_mystery(it, ctx):
     return it["mystery"]
 
 
-@_p("orange")
-def _p_orange(it, ctx):
+@_f("orange")
+def _f_orange(it, ctx):
     return it["total"] >= 516
 
 
-@_p("red_orange")
-def _p_red_orange(it, ctx):
+@_f("red_orange")
+def _f_red_orange(it, ctx):
     return it["has_orange"] or it["has_red"]
 
 
-@_p("high_affix")
-def _p_high_affix(it, ctx):
+@_f("high_affix")
+def _f_high_affix(it, ctx):
     return it["has_high"]
 
 
-@_p("quality")
-def _p_quality(it, ctx):
+@_f("quality")
+def _f_quality(it, ctx):
     return it["quality"]
 
 
-@_p("total")
-def _p_total(it, ctx):
+@_f("total")
+def _f_total(it, ctx):
     return it["total"]
 
 
-@_p("n_affix")
-def _p_n_affix(it, ctx):
+@_f("n_affix")
+def _f_n_affix(it, ctx):
     return it["n_affix"]
 
 
-@_p("empty_slot")
-def _p_empty_slot(it, ctx):
+@_f("empty_slot")
+def _f_empty_slot(it, ctx):
     slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
     return not any(w["icon"][:2] == slot for w in ctx["worn"])
 
 
-@_p("beat_worn")
-def _p_beat_worn(it, ctx):
+@_f("beat_worn")
+def _f_beat_worn(it, ctx):
     slot = it["icon"][:2] if len(it["icon"]) >= 2 else ""
     same = [w for w in ctx["worn"] if w["icon"][:2] == slot]
     if not same:
@@ -978,8 +988,8 @@ def _p_beat_worn(it, ctx):
     return it["total"] > max(w["total"] for w in same)
 
 
-@_p("same_name_best")
-def _p_same_name_best(it, ctx):
+@_f("same_name_best")
+def _f_same_name_best(it, ctx):
     """同名装备保留最好（2026-09-05 新增, 三值语义）。
     有同名(仓库+身上+沙滩同批, 排除自己) → 品质最高才 True, 同品质总值更高才 True,
     否则 False; **无同名 → None(中性, 不因本规则收也不因本规则清)**。
@@ -1039,10 +1049,20 @@ def _tokenize(expr):
         name = m.group(0)
         i += len(name)
         cmp_op = cmp_val = None
-        m2 = re.match(r"(>=|<=|==|!=|>|<)\s*(\d+)", expr[i:])
+        # 数字比较: >= <= == != > < 后跟数字（前导空格容错）
+        m2 = re.match(r"\s*(>=|<=|==|!=|>|<)\s*(\d+)", expr[i:])
         if m2:
             cmp_op, cmp_val = m2.group(1), int(m2.group(2))
             i += len(m2.group(0))
+        else:
+            # 字符串比较: == != contains startswith endswith 后跟引号字符串
+            # ⚠️ alternation 前必须有 \s*（`name contains '剑'` 的 contains 前有空格,
+            #    re.match 从 0 开始, 没有 \s* 会直接失败 → contains 被当字段名吃掉）
+            m3 = re.match(r"\s*(==|!=|contains|startswith|endswith)\s*([\"'])(.*?)\2",
+                          expr[i:])
+            if m3:
+                cmp_op, cmp_val = m3.group(1), m3.group(3)
+                i += len(m3.group(0))
         tokens.append(("pred", name, cmp_op, cmp_val))
     return tokens
 
@@ -1134,26 +1154,36 @@ def _eval_rule(node, it, ctx):
         return None if v is None else (not v)
     # ("pred", cmp_op, cmp_val, name)
     _, cmp_op, cmp_val, name = node
-    pred = RULE_PREDICATES.get(name)
-    if pred is None:
-        raise ValueError(f"未知谓词: {name!r}（可用: {', '.join(sorted(RULE_PREDICATES))}）")
-    val = pred(it, ctx)
+    field = RULE_FIELDS.get(name)
+    if field is None:
+        raise ValueError(f"未知字段: {name!r}（可用: {', '.join(sorted(RULE_FIELDS))}）")
+    val = field(it, ctx)
     if cmp_op is None:
         return bool(val) if val is not None else None
-    if val is None or isinstance(val, bool):
-        raise ValueError(f"谓词 {name} 无法做数值比较 {cmp_op}{cmp_val}")
-    if cmp_op == ">=":
-        return val >= cmp_val
-    if cmp_op == "<=":
-        return val <= cmp_val
-    if cmp_op == ">":
-        return val > cmp_val
-    if cmp_op == "<":
+    # 数字比较
+    if cmp_op in (">=", "<=", ">", "<"):
+        if val is None or isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise ValueError(f"字段 {name} 值 {val!r} 不能做数字比较 {cmp_op}{cmp_val}")
+        if cmp_op == ">=":
+            return val >= cmp_val
+        if cmp_op == "<=":
+            return val <= cmp_val
+        if cmp_op == ">":
+            return val > cmp_val
         return val < cmp_val
-    if cmp_op == "==":
-        return val == cmp_val
-    if cmp_op == "!=":
-        return val != cmp_val
+    # 字符串比较
+    if cmp_op in ("==", "!=", "contains", "startswith", "endswith"):
+        if val is None or not isinstance(val, str):
+            raise ValueError(f"字段 {name} 值 {val!r} 不能做字符串比较 {cmp_op}")
+        if cmp_op == "==":
+            return val == cmp_val
+        if cmp_op == "!=":
+            return val != cmp_val
+        if cmp_op == "contains":
+            return cmp_val in val
+        if cmp_op == "startswith":
+            return val.startswith(cmp_val)
+        return val.endswith(cmp_val)
     raise ValueError(f"未知比较符 {cmp_op}")
 
 
