@@ -410,6 +410,11 @@ def addpoint(zid=None, strategy=None, apply=False):
     remain = total - used
     print(f"总属性点 {total} | 已分配 {used} | 可分配 {remain}")
     print(f"当前六维: {six}")
+    # ⚠️ 限流/页面异常防御（2026-09-05）: total=0 时 apply 模式会算出负数提交,
+    # 非 apply 模式 remain=0 静默跳过也会误报"无需加点" → 统一显式拦截
+    if total <= 0:
+        print("❌ 总属性点解析失败（疑似限流/页面异常），跳过加点")
+        return
 
     # 确定策略: 传入策略 > 当前角色名匹配 > 默认(力量60%+体意1:1)
     cards = list_cards()
@@ -1263,7 +1268,14 @@ def pk(max_fights=20, full=False):
     for i in range(1, max_fights + 1):
         st = parse_pk()
         print(f"\n--- 出击 #{i} 前状态: 段位{st['段位']} {st['进度']} 狗牌{st['狗牌']}/{st['出击']} 连胜{st['连胜']} 连败{st['连败']} 模式={mode} ---")
-        if not full and int(st["狗牌"]) >= 3:
+        # ⚠️ 限流容错: read_block(12) 返回空时 parse_pk 全 "?"，int() 会崩
+        # 整个 pk 步骤（2026-09-05 修复）；解析失败按 0 狗牌继续打，不中断
+        try:
+            dogs = int(st["狗牌"])
+        except (TypeError, ValueError):
+            dogs = 0
+            print("  ⚠️ 狗牌数解析失败（疑似限流），按 0 处理继续")
+        if not full and dogs >= 3:
             print("✅ 已拿满 3 狗牌，停止出击（--full 可打满）")
             break
         # 模式决策: 打人失败/轮空 → 切打野; 打野失败 → 切回打人（循环到 3 狗牌/20 次）
