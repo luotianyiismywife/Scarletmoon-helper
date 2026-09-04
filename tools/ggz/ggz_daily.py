@@ -1128,15 +1128,17 @@ _RULE_CACHE = {}
 def equip_decision(it, worn, store=None, beach_items=None):
     """沙滩装备决策（规则引擎版, 2026-09-05 重构）。返回 (action, reason)。
 
-    action = 'take' / 'clear'；reason = 命中规则名（take 时）或 None。
-    按 BEACH_RULES 逐条求值（可配置, 支持 and/or/not/括号）;
-    任一规则满足 → take（附命中规则名, 供日志展示/用户验证自定义规则）;
-    全部不满足 → clear。单条规则解析/求值失败只跳过该条并告警, 不影响其他规则。
+    action = 'take' / 'clear'；reason = 命中规则名（take 时）或清理原因。
+    流程：先求值 BEACH_RULES（任一命中 → take 候选）→ 再套同名硬过滤：
+      命中规则 且 通过硬过滤 → take（reason=命中规则名）
+      命中规则 但 被硬过滤拦截 → clear（reason=同名硬过滤）⚠️ 硬过滤真正起作用处
+      未命中任何规则 → clear（reason=None = 未命中规则）
+    ⚠️ 硬过滤后置而非前置（2026-09-05 修正）：前置会把"本来就未命中规则
+      的垃圾同名"也归因于"同名硬过滤"，语义误导——垃圾本来就会被清；
+      后置才能准确表达"因同名被拦下的是原本会收的装备"。
     """
     ctx = {"worn": worn, "store": store or [], "beach": beach_items or []}
-    # ⭐ 同名硬性过滤（BEACH_SAME_NAME_BEST=True 时）: 次品同名直接清, 不进规则
-    if not _same_name_allow(it, ctx):
-        return "clear", "同名硬过滤（沙滩存在更好的同名）"
+    hit = None
     for name, expr in BEACH_RULES:
         node = _RULE_CACHE.get(expr)
         if node is None:
@@ -1148,11 +1150,17 @@ def equip_decision(it, worn, store=None, beach_items=None):
                 continue
         try:
             if _eval_rule(node, it, ctx):
-                return "take", name
+                hit = name
+                break
         except ValueError as e:
             print(f"  ⚠️ 规则[{name}] 求值失败: {e} → 跳过该规则")
             continue
-    return "clear", None
+    if hit is None:
+        return "clear", None  # 未命中任何规则 → 清理
+    # 命中规则 → 同名硬性过滤（后置拦截）: 次品同名直接清, 不进仓库
+    if not _same_name_allow(it, ctx):
+        return "clear", "同名硬过滤（存在更好的同名, 即使命中规则也不收）"
+    return "take", hit
 
 
 def _read_beach(retries=3, interval=3):
@@ -1383,7 +1391,7 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             print(f"  ✅ {it['name']} {it['quality']}等 {it['total']:.0f}% → 拾取 [{reason}]")
         else:
             clear_count += 1
-            rsn = f"（{reason}）" if reason else ""
+            rsn = f"（{reason}）" if reason else "（未命中规则）"
             print(f"  ➖ {it['name']} {it['quality']}等 {it['total']:.0f}% → 清理{rsn}")
     print(f"决策: 拾取 {len(take_ids)} 件, 清理 {clear_count} 件")
 
