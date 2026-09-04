@@ -387,12 +387,14 @@ ADDPOINT_STRATEGY = {
 }
 
 
-def addpoint(zid=None, strategy=None):
-    """[0.5] 加点：读取 f=18 六维，把剩余点全部分配。
+def addpoint(zid=None, strategy=None, apply=False):
+    """[0.5] 加点：读取 f=18 六维，按策略分配。
 
-    策略: 主属性堆到 60% 上限，剩余点按副属性列表轮流分配（ADDPOINT_STRATEGY）。
-    2026-09-05 改版: 支持按角色名/策略加点（换角色后自动适配），
-    旧逻辑"力量60%+体意1:1"只用于未定义策略的角色。
+    2026-09-05 改版:
+    - apply=True: 按目标角色策略**全量计算配置并直接提交**（覆盖当前，
+      换角色时用——点数共享，直接提交目标配置即"切换加点"；只耗 1 次修改）
+    - apply=False(默认): 只分配剩余点（日常加点）
+    - c=14 重置接口已废弃（实测返回空、界面无按钮），不再使用
     """
     if zid is None:
         zid = ZID
@@ -408,9 +410,6 @@ def addpoint(zid=None, strategy=None):
     remain = total - used
     print(f"总属性点 {total} | 已分配 {used} | 可分配 {remain}")
     print(f"当前六维: {six}")
-    if remain <= 0:
-        print("无需加点")
-        return
 
     # 确定策略: 传入策略 > 当前角色名匹配 > 默认(力量60%+体意1:1)
     cards = list_cards()
@@ -419,6 +418,54 @@ def addpoint(zid=None, strategy=None):
     if strategy is None and role_name and role_name in ADDPOINT_STRATEGY:
         strategy = ADDPOINT_STRATEGY[role_name]
     print(f"加点策略: {role_name or zid} → {strategy if strategy else '默认(力量60%+体意1:1)'}")
+
+    if apply:
+        # 全量模式: 按策略从头计算目标配置（不依赖当前已分配）
+        plan = {"力量": 0, "敏捷": 0, "智力": 0, "体魄": 0, "精神": 0, "意志": 0}
+        if strategy:
+            cap = int(total * 0.6)
+            main_attr = strategy["main"]
+            plan[main_attr] = min(total, cap)
+            left = total - plan[main_attr]
+            subs = strategy.get("sub", [])
+            i = 0
+            while left > 0 and subs:
+                plan[subs[i % len(subs)]] += 1
+                left -= 1
+                i += 1
+            if left > 0:
+                plan[main_attr] += left
+        else:
+            # 默认: 力量60% + 体意1:1
+            cap = int(total * 0.6)
+            plan["力量"] = min(total, cap)
+            left = total - plan["力量"]
+            half = left // 2
+            plan["体魄"] = half
+            plan["意志"] = left - half
+        # ⚠️ 服务器不接受 0 值（实测报"请输入正确的数字格式"）→ 0 改成 1,
+        # 从主属性扣回（保证总和 = total）
+        for k in plan:
+            if plan[k] == 0:
+                plan[k] = 1
+        need_remove = sum(plan.values()) - total
+        while need_remove > 0:
+            plan[strategy["main"] if strategy else "力量"] -= 1
+            need_remove -= 1
+        # 目标配置与当前一致则跳过（省 1 次修改）
+        if plan == six:
+            print("目标配置与当前一致，无需改动")
+            return
+        print(f"切换加点方案: {plan} (总计{sum(plan.values())})")
+        r = click(2, id=zid,
+                  add01=plan["力量"], add02=plan["敏捷"], add03=plan["智力"],
+                  add04=plan["体魄"], add05=plan["精神"], add06=plan["意志"])
+        show("c=2 加点返回", r)
+        return
+
+    if remain <= 0:
+        print("无需加点")
+        return
 
     plan = dict(six)
     if strategy:
@@ -1250,9 +1297,10 @@ def pk(max_fights=20, full=False):
                     print(f"  ⚠️ 切卡失败: {strip_tags(r)[:60]}")
                     continue
                 ZID = new_zid
-                # 换角色后检查加点: 有剩余点按该角色策略分配（2026-09-05）
+                # 换角色后按新角色策略切换加点（2026-09-05: 点数共享,
+                # apply 全量覆盖 = 切到该角色专属配置, 只耗 1 次修改）
                 try:
-                    addpoint(zid=new_zid)
+                    addpoint(zid=new_zid, apply=True)
                 except Exception as e:
                     print(f"  ⚠️ 加点异常: {e}")
                 mode = "pvp"  # 从打人重新开始
