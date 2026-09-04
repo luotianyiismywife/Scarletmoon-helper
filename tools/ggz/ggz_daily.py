@@ -352,9 +352,47 @@ def show(title, text, maxlen=500):
 
 # ---------- 步骤 ----------
 
-def addpoint():
-    """[0.5] 加点：读取 f=18 六维，把剩余点分配（主属性力量→60%上限，副属性体/意 1:1）"""
-    t = read_block(18, zid=ZID)
+# 各角色加点策略（2026-09-05，参考 07-角色属性表.md）
+# 格式: {主属性: 60%上限优先, 副属性分配: [属性名, ...]（按顺序轮流 +1）}
+# 所有策略都保证: 主属性堆到 60% 上限，剩余点按副属性列表轮流分配
+ADDPOINT_STRATEGY = {
+    # 主练：主力量敏捷，靠装备撑血量和技能率，点少量精神叠护盾
+    "舞": {"main": "力量", "sub": ["敏捷", "体魄", "意志"]},
+    # 剑盾反伤：全精默 / 高穿默（智精）
+    "默": {"main": "精神", "sub": ["智力", "意志"]},
+    # 当前不推荐（刃琳/剑盾琳）—— 通用力量流
+    "琳": {"main": "力量", "sub": ["体魄", "意志"]},
+    # 对剑全敏
+    "命": {"main": "敏捷", "sub": ["力量", "意志"]},
+    # 当前不推荐（星火宝石）—— 通用力量流
+    "艾": {"main": "力量", "sub": ["体魄", "意志"]},
+    # 打野 T0：主敏捷+精神（第三回合攻击次数≥3次）
+    "梦": {"main": "敏捷", "sub": ["精神", "智力"]},
+    # 打野 T1：对剑薇（智力至技能率+，余全敏）
+    "薇": {"main": "敏捷", "sub": ["智力", "意志"]},
+    # 打野 T1：力量 1100/敏 1501/物防100/魔防300
+    "伊": {"main": "力量", "sub": ["敏捷", "意志"]},
+    # PVP 强势/打野下水道：剑盾冥（力 600-700/敏200/智200/余意志）
+    "冥": {"main": "意志", "sub": ["力量", "敏捷", "智力"]},
+    # 打野 T0：血系最强（血之狂暴）
+    "希": {"main": "体魄", "sub": ["意志", "力量"]},
+    # PVP 输出：1300 智/900 精/800 敏
+    "霞": {"main": "智力", "sub": ["精神", "敏捷"]},
+    # 新卡：沸血+神秘弓 / 高速打护盾
+    "绮": {"main": "力量", "sub": ["敏捷", "体魄"]},
+}
+
+
+def addpoint(zid=None, strategy=None):
+    """[0.5] 加点：读取 f=18 六维，把剩余点全部分配。
+
+    策略: 主属性堆到 60% 上限，剩余点按副属性列表轮流分配（ADDPOINT_STRATEGY）。
+    2026-09-05 改版: 支持按角色名/策略加点（换角色后自动适配），
+    旧逻辑"力量60%+体意1:1"只用于未定义策略的角色。
+    """
+    if zid is None:
+        zid = ZID
+    t = read_block(18, zid=zid)
     six = {}
     for key, name in [("sjll", "力量"), ("sjmj", "敏捷"), ("sjzl", "智力"),
                       ("sjtp", "体魄"), ("sjjs", "精神"), ("sjyz", "意志")]:
@@ -370,20 +408,45 @@ def addpoint():
         print("无需加点")
         return
 
-    # 策略：力量堆到 60% 上限，剩余体/意 1:1
-    cap = int(total * 0.6)
+    # 确定策略: 传入策略 > 当前角色名匹配 > 默认(力量60%+体意1:1)
+    cards = list_cards()
+    cur_name = [n for n, z in cards.items() if z == zid]
+    role_name = cur_name[0] if cur_name else None
+    if strategy is None and role_name and role_name in ADDPOINT_STRATEGY:
+        strategy = ADDPOINT_STRATEGY[role_name]
+    print(f"加点策略: {role_name or zid} → {strategy if strategy else '默认(力量60%+体意1:1)'}")
+
     plan = dict(six)
-    force = min(six["力量"] + remain, cap)
-    plan["力量"] = force
-    left = remain - (force - six["力量"])
-    # 剩余按 体/意 1:1
-    half = left // 2
-    plan["体魄"] = six["体魄"] + half
-    plan["意志"] = six["意志"] + (left - half)
-    if left % 2:
-        plan["意志"] += 0
+    if strategy:
+        # 主属性堆到 60% 上限
+        cap = int(total * 0.6)
+        main_attr = strategy["main"]
+        sub_attrs = strategy.get("sub", [])
+        main_add = min(remain, cap - six[main_attr])
+        plan[main_attr] = six[main_attr] + main_add
+        left = remain - main_add
+        # 副属性轮流 +1（直到分配完）
+        i = 0
+        while left > 0 and sub_attrs:
+            attr = sub_attrs[i % len(sub_attrs)]
+            plan[attr] += 1
+            left -= 1
+            i += 1
+        # 还有剩 → 全给主属性（理论上不会发生, 60% 上限后剩余应能分完）
+        if left > 0:
+            plan[main_attr] += left
+    else:
+        # 默认: 力量堆到 60% 上限，剩余体/意 1:1
+        cap = int(total * 0.6)
+        force = min(six["力量"] + remain, cap)
+        plan["力量"] = force
+        left = remain - (force - six["力量"])
+        half = left // 2
+        plan["体魄"] = six["体魄"] + half
+        plan["意志"] = six["意志"] + (left - half)
+
     print(f"加点方案: {plan}")
-    r = click(2, id=ZID,
+    r = click(2, id=zid,
               add01=plan["力量"], add02=plan["敏捷"], add03=plan["智力"],
               add04=plan["体魄"], add05=plan["精神"], add06=plan["意志"])
     show("c=2 加点返回", r)
@@ -1183,6 +1246,11 @@ def pk(max_fights=20, full=False):
                     print(f"  ⚠️ 切卡失败: {strip_tags(r)[:60]}")
                     continue
                 ZID = new_zid
+                # 换角色后检查加点: 有剩余点按该角色策略分配（2026-09-05）
+                try:
+                    addpoint(zid=new_zid)
+                except Exception as e:
+                    print(f"  ⚠️ 加点异常: {e}")
                 mode = "pvp"  # 从打人重新开始
             continue
         if kind == "lose":
