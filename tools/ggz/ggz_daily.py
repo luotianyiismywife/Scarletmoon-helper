@@ -795,11 +795,12 @@ def parse_equips(html_text, want_id=False):
       <button ... data-content="<p class='fyg_xlxxXXX'>词条名 +N<span class='pull-right bg-*'>&nbsp;150%&nbsp;</span></p>..."
               title="Lv.<span>100</span> 装备名" ...><img src="ys/icon/z2101_4.gif">...
     沙滩版额外含 zbtip('ID','4')。
-    返回 [{icon, quality, name, level, total, mystery, bid, n_affix,
+    返回 [{icon, quality, name, level, total, mystery, bid,
            has_orange, has_red, has_high, affixes}]
       icon: 部位码 zXXXX；quality: 品质数字；total: 词条总值(% 之和)；bid: 沙滩拾取 id
       has_orange/has_red: 橙/红词条；has_high: 含高价值词条
       affixes: 词条明细 [{name, text, pct, color}]（2026-08-23 新增，供装备记录）
+      ⚠️ 词条槽固定 4 个（03 文档实测），无 n_affix 字段（恒为 4 无区分度）
     """
     HIGH_AFFIX = ["生命偷取", "附加物伤", "附加魔伤", "附加物穿", "附加魔穿",
                   "技能概率", "暴击概率", "攻击速度"]
@@ -831,7 +832,6 @@ def parse_equips(html_text, want_id=False):
         has_orange = False
         has_red = False
         has_high = False
-        n_affix = 0
         affixes = []  # 词条明细 [{name, text, pct, color}]
         # 每词条: <p class='fyg_xlxxXXX'>词条名 +N<span class='pull-right bg-XXX'>&nbsp;N%&nbsp;</span></p>
         for m in re.finditer(r"<p class='fyg_xlxx(\w+)'>(.*?)</p>", btn, re.S):
@@ -847,7 +847,6 @@ def parse_equips(html_text, want_id=False):
                 continue
             color, pct = val_m.group(1), float(val_m.group(2))
             total += pct
-            n_affix += 1
             if color == "warning":
                 has_orange = True
             elif color == "danger":
@@ -863,7 +862,7 @@ def parse_equips(html_text, want_id=False):
         bid = m.group(1) if m else None
         result.append({"icon": icon, "quality": quality, "name": name,
                        "level": level, "total": total, "mystery": mystery, "bid": bid,
-                       "n_affix": n_affix, "has_orange": has_orange, "has_red": has_red,
+                       "has_orange": has_orange, "has_red": has_red,
                        "has_high": has_high, "affixes": affixes})
     return result
 
@@ -879,7 +878,6 @@ def parse_equips(html_text, want_id=False):
 #   mystery     是否含神秘词条（布尔, 直接写 mystery / not mystery）
 #   quality     品质等级（数字: 3绿/4橙/5红…, 可 >= > <= < == != 数字）
 #   total       词条总值%（数字, 几个词条百分比之和, 可比较）
-#   n_affix     词条数量（数字）
 #   orange      是否橙装（total>=516, 布尔）
 #   red_orange  是否含红/橙词条（布尔）
 #   high_affix  是否含高价值词条（布尔）
@@ -966,11 +964,6 @@ def _f_quality(it, ctx):
 @_f("total")
 def _f_total(it, ctx):
     return it["total"]
-
-
-@_f("n_affix")
-def _f_n_affix(it, ctx):
-    return it["n_affix"]
 
 
 @_f("empty_slot")
