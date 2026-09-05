@@ -918,7 +918,7 @@ BEACH_RULES = [
 # 关掉 = 同名完全交给 BEACH_RULES 表达式决定。
 BEACH_SAME_NAME_BEST = True
 
-# 字段注册表: 名称 → 函数(it, ctx) → 值(数字/字符串/布尔/None)
+# 字段注册表（一级字段）: 名称 → 函数(it, ctx) → 值(数字/字符串/布尔/None)
 RULE_FIELDS = {}
 
 
@@ -927,6 +927,27 @@ def _f(name):
         RULE_FIELDS[name] = fn
         return fn
     return deco
+
+
+# 字段注册表（二级字段）: 名称 → 函数(一级字段求值函数, it, ctx) → 值
+# 二级字段 = 由一级字段**派生**（非独立数据），如 total_number = affix0_pct+affix1_pct+...
+DERIVED_FIELDS = {}
+
+
+def _df(name):
+    def deco(fn):
+        DERIVED_FIELDS[name] = fn
+        return fn
+    return deco
+
+
+def _get_field_val(name, it, ctx):
+    """统一取字段值: 一级字段直取, 二级字段派生。未知字段返回 None(调用方报错)。"""
+    if name in RULE_FIELDS:
+        return RULE_FIELDS[name](it, ctx)
+    if name in DERIVED_FIELDS:
+        return DERIVED_FIELDS[name](it, ctx)
+    return None
 
 
 @_f("name")
@@ -944,9 +965,19 @@ def _f_quality(it, ctx):
     return it["quality"]
 
 
-@_f("total_number")
-def _f_total(it, ctx):
-    return it["total"]
+# ═══════════ 二级字段（2026-09-05 定义：由一级字段派生，非独立数据）═══════════
+# total_number = 4 词条评分之和（一级 affix0~3_pct 派生）
+# 实现：直接引用一级字段求值函数，体现"二级 = 一级组合"
+
+
+@_df("total_number")
+def _df_total(it, ctx):
+    total = 0.0
+    for i in range(4):
+        v = RULE_FIELDS[f"affix{i}_pct"](it, ctx)
+        if v is not None:
+            total += v
+    return total
 
 
 # ═══════════ 词条位置字段（2026-09-05 新增）═══════════
@@ -1022,6 +1053,8 @@ def _tokenize(expr):
         i += len(name)
         cmp_op = cmp_val = None
         # 数字比较: >= <= == != > < 后跟数字（前导空格容错）
+        # ⚠️ ==/!= 后跟数字 = 数字比较（2026-09-05 修复：之前 == 只走字符串分支，
+        #    total_number==430 会报"不能做字符串比较"）；==/!= 后跟引号 = 字符串比较
         m2 = re.match(r"\s*(>=|<=|==|!=|>|<)\s*(\d+)", expr[i:])
         if m2:
             cmp_op, cmp_val = m2.group(1), int(m2.group(2))
@@ -1100,7 +1133,8 @@ def _parse_expr(expr):
 def _eval_rule(node, it, ctx):
     """三值逻辑求值: True/False/None。None = 中性(该规则不做决定),
     为将来可能的"中性字段"保留(如同名比较无同名情形);
-    当前字段(name/mystery/quality/total_number)均返回 bool/数字/字符串, None 分支不触发。"""
+    当前字段一级(name/mystery/quality/affixN*)+二级(total_number)均返回
+    bool/数字/字符串, None 分支不触发。"""
     kind = node[0]
     if kind == "or":
         l = _eval_rule(node[1], it, ctx)
@@ -1127,10 +1161,10 @@ def _eval_rule(node, it, ctx):
         return None if v is None else (not v)
     # ("pred", cmp_op, cmp_val, name)
     _, cmp_op, cmp_val, name = node
-    field = RULE_FIELDS.get(name)
-    if field is None:
-        raise ValueError(f"未知字段: {name!r}（可用: {', '.join(sorted(RULE_FIELDS))}）")
-    val = field(it, ctx)
+    # ⚠️ 统一取字段: 一级(直取) → 二级(派生)
+    if name not in RULE_FIELDS and name not in DERIVED_FIELDS:
+        raise ValueError(f"未知字段: {name!r}（可用: {', '.join(sorted(RULE_FIELDS) + sorted(DERIVED_FIELDS))}）")
+    val = _get_field_val(name, it, ctx)
     if cmp_op is None:
         return bool(val) if val is not None else None
     # 数字比较
@@ -1147,17 +1181,24 @@ def _eval_rule(node, it, ctx):
         if cmp_op == ">":
             return val > cmp_val
         return val < cmp_val
+    # == / != : 根据值类型智能比较（2026-09-05 修复）
+    #   数字值 → 数字比较（total_number==430）；字符串值 → 字符串比较（name=='探险者之剑'）
+    if cmp_op in ("==", "!="):
+        if val is None:
+            return False
+        if isinstance(val, bool) or isinstance(val, (int, float)):
+            # 数字: cmp_val 已是 int（tokenizer 数字分支）→ 数字比较
+            return val == cmp_val if cmp_op == "==" else val != cmp_val
+        if isinstance(val, str):
+            return val == cmp_val if cmp_op == "==" else val != cmp_val
+        raise ValueError(f"字段 {name} 值 {val!r} 无法比较 {cmp_op}")
     # 字符串比较
-    if cmp_op in ("==", "!=", "contains", "startswith", "endswith"):
+    if cmp_op in ("contains", "startswith", "endswith"):
         # ⚠️ 词条缺失（affixN 越界返回 None）→ 不匹配（False），不报错
         if val is None:
             return False
         if not isinstance(val, str):
             raise ValueError(f"字段 {name} 值 {val!r} 不能做字符串比较 {cmp_op}")
-        if cmp_op == "==":
-            return val == cmp_val
-        if cmp_op == "!=":
-            return val != cmp_val
         if cmp_op == "contains":
             return cmp_val in val
         if cmp_op == "startswith":
