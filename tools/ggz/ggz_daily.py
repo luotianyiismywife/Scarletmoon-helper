@@ -882,8 +882,9 @@ def parse_equips(html_text, want_id=False):
 # 比较符: 数字字段 = >= > <= < == != ; 名字字段 = == != contains startswith endswith
 # 字符串值用双引号或单引号包裹:  name=="探险者之剑"  name contains "之剑"
 #
-# ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤** — 沙滩装备存在同名
-#   （仓库+身上+沙滩同批）时, 不是其中品质/总值最高的直接清理, 不进入规则判定
+# ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤**（后置拦截）— 命中规则的
+#   装备若在 **仓库+沙滩同批**（2026-09-05 修订：不再看身上）中存在同名且更好
+#   （品质更高；同品质总值更高），直接清理。**完全相同（同品质同总值）→ 都保留**。
 #   (即“同名装备只在仓库保留最好的”)。设为 False 则关闭该过滤。
 #
 # 示例（用户自定义）:
@@ -941,19 +942,28 @@ def _f_total(it, ctx):
 
 
 def _same_name_allow(it, ctx):
-    """同名硬性过滤: 返回 True=允许进入规则判定 / False=次品同名直接清。
+    """同名硬性过滤（2026-09-05 修订）。返回 True=允许收 / False=次品同名直接清。
+
+    比较范围 = **仓库 + 沙滩同批**（2026-09-05 用户指定：不再看身上，
+    身上装备不参与沙滩决策）。
+    判定：品质数字最高才收；**同品质同总值（完全相同）→ 都保留**
+    （2026-09-05 用户指定：完全相同的两件不该互斥全清）；同品质不同总值
+    → 总值更高才收。
     BEACH_SAME_NAME_BEST=False 时恒 True(不过滤)。"""
     if not BEACH_SAME_NAME_BEST or it["name"] == "?":
         return True
-    rivals = [w for w in ctx["store"] + ctx["worn"] + ctx["beach"]
+    rivals = [w for w in ctx["store"] + ctx["beach"]
               if w["name"] == it["name"] and w is not it]
     if not rivals:
         return True
     best_q = max(w["quality"] for w in rivals)
-    best_t = max(w["total"] for w in rivals if w["quality"] == best_q)
     if it["quality"] > best_q:
         return True
-    return it["quality"] == best_q and it["total"] > best_t
+    if it["quality"] < best_q:
+        return False
+    # 同品质: 总值严格更高才收; 完全相同(同总值) → 都保留
+    best_t = max(w["total"] for w in rivals if w["quality"] == best_q)
+    return it["total"] >= best_t
 
 
 # ---------- 表达式解析器（递归下降, 支持 and/or/not/括号/数值比较） ----------
@@ -1355,7 +1365,7 @@ def beach(allow_refresh=True, wait_after_refresh=True):
             return
     worn = parse_equips(read_block(6))
     # 仓库读取（2026-09-05: 同名保留最好规则需要仓库数据）;
-    # 读取失败(限流)只告警, 不中断 — 同名规则退化为仅对比身上+沙滩同批
+    # 读取失败(限流)只告警, 不中断 — 同名规则退化为仅对比沙滩同批
     store = []
     try:
         store = parse_equips(read_block(2))
