@@ -29,6 +29,7 @@ import random
 import datetime
 import hashlib
 import html
+from collections import defaultdict
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -1255,11 +1256,18 @@ def get_beach_countdown():
 def beach(allow_refresh=True, wait_after_refresh=True):
     """[4] 沙滩收取 + 清理（4.5 规则）。
 
-    流程：读 f=1 沙滩 + f=6 身上 → 逐件决策 → 先 c=1 拾取要收的 → 再 c=20 清理剩余。
+    流程：**先检查仓库空格（<10 自动整理腾仓）** → 读 f=1 沙滩 + f=6 身上
+    → 逐件决策 → 先 c=1 拾取要收的 → 再 c=20 清理剩余。
     沙滩空但有随机装备箱 → 自动强制刷新（c=12）再筛（allow_refresh=False 时跳过，
     供 beach_refresh 调用避免二次刷新白耗箱子）。
     wait_after_refresh=False：沙滩空时直接跳过不等待（--no-refresh 场景，
     保留装备箱供测试，不耗 c=12）。
+
+    ⚠️ 仓库预整理（2026-09-05 新增）：拾取会占仓库格，空格不足时 c=1 拾取失败
+    （装备滞留沙滩）。因此开头读仓库空格，<10（一滩最多拾取 10 件）→ 自动调
+    warehouse_tidy(clear_beach=False) 整理腾仓（灰蓝全丢 + 绿装同名去重 → 丢沙滩）。
+    ⚠️ 不立即 c=20：否则会误清沙滩上自然刷新的未决策装备。tidy 丢出的装备
+    （灰蓝未命中规则 / 低值绿被同名硬过滤拦）由本流程决策后统一 c=20 回收，不捡回。
 
     ⚠️ 踩坑记录（2026-08-18 重写）：
       1. f=1 返回空/异常 ≠ 沙滩空：旧代码不区分"读取失败"和"真空"，
@@ -1274,6 +1282,24 @@ def beach(allow_refresh=True, wait_after_refresh=True):
       5. 限流：momozhen 对连续请求限流（返回空/SSL 断开），requests.Session 已缓解，
          但高频场景仍需间隔 ≥2s。
     """
+    # ⚠️ 仓库预整理（2026-09-05）：拾取占仓库格，空格不足时 c=1 拾取失败。
+    #   空格 <10（一滩最多拾取 10 件）→ 自动 tidy 腾仓。
+    #   ⚠️ clear_beach 必须为 False：tidy 若立即 c=20 会清掉沙滩上**自然刷新
+    #   未决策**的装备（误清！）；tidy 只丢沙滩，后续 beach 正常读滩→决策，
+    #   丢出的灰蓝未命中规则/低值绿被同名硬过滤拦 → 由 beach 自己的 c=20 统一回收，
+    #   不误伤自然装备。整理失败只告警，不阻塞 beach。
+    space = get_store_space()
+    if space is not None:
+        print(f"仓库剩余空格: {space}")
+        if space < 10:
+            print("→ 仓库空格不足 10，先整理仓库腾空间（只丢沙滩，清理由 beach 统一处理）...")
+            try:
+                warehouse_tidy(clear_beach=False)
+            except Exception as e:
+                print(f"  ⚠️ 仓库整理失败（继续 beach，拾取可能失败）: {e}")
+    else:
+        # 空格读取失败（限流/格式变化）→ 留日志便于追溯，不阻塞 beach
+        print("⚠️ 仓库空格读取失败（疑似限流/格式变化），跳过预整理（拾取可能因空间不足失败）")
     # ⚠️ 自然刷新倒计时（2026-08-24 新增）：每次执行都打印一次，留档便于追溯
     #   "自然刷新时机"。数据源 = fyg_beach.php 页面服务端渲染（f=1 接口不返回）。
     #   1320 分钟倒计时归零后装备**不会立即**冲上沙滩，服务器还有 ≈4~14 分钟
@@ -1445,6 +1471,137 @@ def smelt():
         if "至少需要稀有" in msg or "不可熔炼" in msg:
             print("  ⚠️ 熔炼资格判断有误，停止")
             break
+
+
+def get_store_space():
+    """读取仓库剩余空格数（f=2 返回 `剩余 N 仓库空格`，2026-09-05 实测确认）。
+
+    返回 int；读取失败/格式变化返回 None（调用方自行降级，如跳过整理）。
+    """
+    try:
+        t = read_block(2)
+        m = re.search(r"剩余\s*(\d+)\s*仓库空格", t)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def warehouse_tidy(dry_run=False, green_only=False, clear_beach=False):
+    """[4.5d] 仓库整理（2026-09-05 整合进 ggz_daily，源自 tools/ggz/warehouse_tidy.py）。
+
+    整理规则（2026-08-24 用户指定）：
+      - 灰/蓝（品质 1/2）：全部丢沙滩（c=7，可逆，24h 内可捡回）
+        ⚠️ 日常脚本沙滩不会捡灰蓝装备，所以仓库里的灰蓝多为历史遗留/熔炼备料
+      - 绿（品质 3）：同名装备只留 4 词条总值（total）最高的一件，其余丢沙滩
+        （绿色不会有神秘属性——品质≥4 才可能出神秘，见 03-装备说明.md §2.3）
+      - 橙/红（品质 4/5）：不处理（可能含神秘，价值高，留给用户手动决策）
+
+    丢沙滩后默认不自动清理（保守，避免误清沙滩原有装备）。
+    clear_beach=True 则丢完立即 c=20 清理沙滩回收锻造石。
+    用途：beach 前整理仓库腾空间（空格 <10 时自动调用）。
+    """
+    t = read_block(2)
+    items = parse_equips(t, want_id=True)
+    if not items:
+        print("仓库空，无需整理")
+        return
+    print(f"仓库共 {len(items)} 件装备")
+
+    # 按品质分组统计
+    by_quality = defaultdict(int)
+    for it in items:
+        by_quality[it["quality"]] += 1
+    qnames = {1: "灰", 2: "蓝", 3: "绿", 4: "橙", 5: "红"}
+    print("品质分布: " + " / ".join(f"{qnames.get(q, q)}{c}件" for q, c in sorted(by_quality.items())))
+
+    to_drop = []
+
+    # ① 灰/蓝（品质 1/2）：全部丢沙滩（除非 --green-only）
+    if not green_only:
+        low = [it for it in items if it["quality"] in (1, 2) and it["bid"]]
+        if low:
+            print(f"\n--- 灰/蓝装备（品质1/2）{len(low)} 件 → 全部丢弃 ---")
+            for it in low:
+                print(f"  ✗ {it['name']} {it['quality']}等 {it['total']:.0f}% (id={it['bid']})")
+            to_drop.extend(low)
+        else:
+            print("\n无灰/蓝装备")
+
+    # ② 绿（品质 3）：同名只留总值最高
+    green = [it for it in items if it["quality"] == 3]
+    if green:
+        print(f"\n--- 绿色装备（品质3）{len(green)} 件 → 同名留总值最高 ---")
+        groups = defaultdict(list)
+        for it in green:
+            groups[it["name"]].append(it)
+        for name, group in sorted(groups.items()):
+            group.sort(key=lambda x: x["total"], reverse=True)
+            keep = group[0]
+            drops = group[1:]
+            print(f"  {name}: {len(group)} 件 → 保留 {keep['total']:.0f}% (id={keep['bid']})"
+                  + (f"，丢弃 {len(drops)} 件" if drops else ""))
+            for d in drops:
+                print(f"    ✗ 丢弃 {d['total']:.0f}% (id={d['bid']})")
+                if d["bid"]:
+                    to_drop.append(d)
+    else:
+        print("\n无绿色装备")
+
+    # ③ 橙/红（品质 4/5）：仅列出，不处理
+    high = [it for it in items if it["quality"] in (4, 5)]
+    if high:
+        print(f"\n--- 橙/红装备（品质4/5）{len(high)} 件 → 不处理（可能含神秘，手动决策）---")
+        for it in high:
+            mark = []
+            if it["mystery"]:
+                mark.append("神秘")
+            if it["has_orange"]:
+                mark.append("橙词条")
+            if it["has_red"]:
+                mark.append("红词条")
+            mark_str = f" [{','.join(mark)}]" if mark else ""
+            print(f"  ✓ 保留 {it['name']} {it['quality']}等 {it['total']:.0f}% (id={it['bid']}){mark_str}")
+
+    # 汇总
+    print(f"\n{'=' * 50}")
+    print(f"待丢弃: {len(to_drop)} 件")
+    if not to_drop:
+        print("仓库无需整理")
+        return
+    if dry_run:
+        print("[--dry-run] 仅预览，不实际操作")
+        return
+
+    # 逐件丢沙滩（c=7，可逆）
+    print("开始丢沙滩...")
+    drop_ok = 0
+    for i, it in enumerate(to_drop, 1):
+        r = click(7, id=it["bid"])
+        msg = strip_tags(r)[:80]
+        # ⚠️ 成功判定（2026-09-05 实测校准）：c=7 成功返回
+        #   "已将装备丢弃到沙滩，在它从沙滩上消失前，仍可以捡回。"（08-24 日志 26 条样本）；
+        #   失败（限流/会话失效/id 失效）要显式告警，避免"看似成功实际没丢"
+        ok = "丢弃到沙滩" in msg or "已放入" in msg
+        mark = "✅" if ok else "❌"
+        print(f"  [{i}/{len(to_drop)}] {mark} c=7 丢弃 {it['name']} {it['quality']}等 "
+              f"{it['total']:.0f}% (id={it['bid']}): {msg}")
+        if ok:
+            drop_ok += 1
+        time.sleep(random.uniform(0.5, 1.0))  # 间隔避免限流
+
+    print(f"\n完成：成功丢弃 {drop_ok}/{len(to_drop)} 件到沙滩（24h 内可捡回）")
+    if drop_ok < len(to_drop):
+        print(f"  ⚠️ {len(to_drop) - drop_ok} 件丢弃失败，请检查返回文本（限流/会话/id 失效）")
+
+    # clear_beach：丢完后立即清理沙滩回收锻造石
+    if clear_beach:
+        print("\n[--clear-beach] 自动清理沙滩回收锻造石...")
+        r = click(20)
+        msg = strip_tags(r)[:120]
+        print(f"  c=20 清理沙滩: {msg}")
+    else:
+        print("\n未自动清理沙滩（保留可捡回窗口）")
+        print("→ 如需清理沙滩回收锻造石，运行: py tools/ggz/ggz_daily.py beach")
 
 
 def beach_refresh():
@@ -1853,6 +2010,11 @@ def main():
         beach_refresh()
     elif cmd == "smelt":
         smelt()
+    elif cmd == "warehouse_tidy":
+        dry_run = "--dry-run" in sys.argv
+        green_only = "--green-only" in sys.argv
+        clear_beach = "--clear-beach" in sys.argv
+        warehouse_tidy(dry_run=dry_run, green_only=green_only, clear_beach=clear_beach)
     elif cmd == "pk":
         full = "--full" in sys.argv
         args = [a for a in sys.argv[2:] if not a.startswith("--")]
