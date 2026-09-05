@@ -874,33 +874,13 @@ def parse_equips(html_text, want_id=False):
 # 满足**任一**规则 → 拾取(take), 全部不满足 → 清理(clear)。
 # 修改本配置即改规则, 无需命令行参数。
 #
-# 可用字段（作用于当前沙滩装备）:
-#   name        装备名字（字符串, 可 == / != / contains / startswith / endswith）
-#   mystery     是否含神秘词条（布尔, 直接写 mystery / not mystery）
-#   quality     品质等级（数字: 3绿/4橙/5红…, 可 >= > <= < == != 数字）
-#   total_number  词条总值%（数字, = affix0_pct+affix1_pct+affix2_pct+affix3_pct,
-#                    可比较）
-#   affix0~3              第 N 个词条文本（如 "物理攻击 +64.4%"）→ 字符串比较
-#   affix0~3_name         第 N 个词条名（如 "物理攻击"）→ 字符串比较
-#   affix0~3_pct          第 N 个词条评分（数字）→ 数字比较
-#   affix0~3_color        第 N 个词条颜色（red/orange/blue/green/purple）→ 字符串比较
-#                         ⚠️ 词条固定 4 个（每种装备种类固定, 只有值不同），
-#                         按位置访问可靠；词条缺失时比较结果 = False
-#
-# 比较符: 数字字段 = >= > <= < == != ; 名字字段 = == != contains startswith endswith
-# 字符串值用双引号或单引号包裹:  name=="探险者之剑"  name contains "之剑"
-#
-# ⭐ BEACH_SAME_NAME_BEST(默认 True): 同名**硬性过滤**（后置拦截）— 命中规则的
-#   装备若在 **仓库+沙滩同批**（2026-09-05 修订：不再看身上）中存在同名且更好
-#   （品质更高；同品质总值更高），直接清理。**完全相同（同品质同总值）→ 都保留**。
-#   (即“同名装备只在仓库保留最好的”)。设为 False 则关闭该过滤。
-#
-# 示例（用户自定义）:
-#   BEACH_RULES = [
-#       ("神秘3等", "mystery and quality>=3"),
-#       ("只留探险者之剑高值", "name=='探险者之剑' and total_number>=450"),
-#   ]
-#   → 拾取 = (神秘 且 3等以上) 或 (指定名且高总值)
+# 📖 字段(一级/二级)/比较符/语法/示例/同名硬过滤的**完整说明见**:
+#   tools/ggz/装备词条及筛选规则.md（单一事实源）
+# 摘要:
+#   一级字段(装备原始数据): name / mystery / quality / affix0~3(_name/_pct/_color)
+#   二级字段(派生快捷): total_number = affix0_pct+affix1_pct+affix2_pct+affix3_pct
+#   比较符: 数字 >= > <= < == != ; 字符串 == != contains startswith endswith(值用引号)
+#   BEACH_SAME_NAME_BEST: 同名硬过滤(默认开, 后置拦截, 仓库+沙滩同批, 完全相同都保留)
 
 BEACH_RULES = [
     # 含神秘 → 必收（低品质神秘也收, 神秘价值>>装备本身, 独立于可熔炼）
@@ -914,7 +894,7 @@ BEACH_RULES = [
 ]
 
 # ⭐ 同名硬性过滤（2026-09-05, 默认开）: 同名装备不是最好的 → 直接清理。
-# 开着 = 仓库同名只留一件最好的(品质最高, 同品质留总值最高);
+# 开着 = 仓库+沙滩同批同名只留一件最好的(品质最高, 同品质留总值最高; 完全相同都保留);
 # 关掉 = 同名完全交给 BEACH_RULES 表达式决定。
 BEACH_SAME_NAME_BEST = True
 
@@ -967,7 +947,6 @@ def _f_quality(it, ctx):
 
 # ═══════════ 二级字段（2026-09-05 定义：由一级字段派生，非独立数据）═══════════
 # total_number = 4 词条评分之和（一级 affix0~3_pct 派生）
-# 实现：直接引用一级字段求值函数，体现"二级 = 一级组合"
 
 
 @_df("total_number")
@@ -981,12 +960,9 @@ def _df_total(it, ctx):
 
 
 # ═══════════ 词条位置字段（2026-09-05 新增）═══════════
-# 装备固定 4 词条，且每种装备的词条种类固定（只有值不同）→ 按位置访问可靠。
-#   affix0~affix3          词条文本（如 "物理攻击 +64.4%"）→ 字符串比较
-#   affix0_name~affix3_name  词条名（如 "物理攻击"）→ 字符串比较
-#   affix0_pct~affix3_pct    词条评分（如 95.0）→ 数字比较
-#   affix0_color~affix3_color 词条颜色（red/orange/blue/green/purple）→ 字符串比较
-# 词条不足 4 个（解析异常/格式变化）→ 字段返回 None，比较结果为 False（不匹配）
+# 装备固定 4 词条，每种装备词条种类固定 → 按位置访问单个词条（affix0~3/_name/_pct/_color）。
+# 词条不足 4 个（解析异常/格式变化）→ 字段返回 None，比较结果为 False（不匹配）。
+# 字段含义/示例详见 tools/ggz/装备词条及筛选规则.md。
 _AFFIX_SUFFIXES = [("", "text"), ("_name", "name"), ("_pct", "pct"), ("_color", "color")]
 for _i in range(4):
     for _suffix, _key in _AFFIX_SUFFIXES:
