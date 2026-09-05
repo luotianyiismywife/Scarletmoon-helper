@@ -878,7 +878,14 @@ def parse_equips(html_text, want_id=False):
 #   name        装备名字（字符串, 可 == / != / contains / startswith / endswith）
 #   mystery     是否含神秘词条（布尔, 直接写 mystery / not mystery）
 #   quality     品质等级（数字: 3绿/4橙/5红…, 可 >= > <= < == != 数字）
-#   total       词条总值%（数字, 几个词条百分比之和, 可比较）
+#   total_number  词条总值%（数字, = affix0_pct+affix1_pct+affix2_pct+affix3_pct,
+#                    可比较）
+#   affix0~3              第 N 个词条文本（如 "物理攻击 +64.4%"）→ 字符串比较
+#   affix0~3_name         第 N 个词条名（如 "物理攻击"）→ 字符串比较
+#   affix0~3_pct          第 N 个词条评分（数字）→ 数字比较
+#   affix0~3_color        第 N 个词条颜色（red/orange/blue/green/purple）→ 字符串比较
+#                         ⚠️ 词条固定 4 个（每种装备种类固定, 只有值不同），
+#                         按位置访问可靠；词条缺失时比较结果 = False
 #
 # 比较符: 数字字段 = >= > <= < == != ; 名字字段 = == != contains startswith endswith
 # 字符串值用双引号或单引号包裹:  name=="探险者之剑"  name contains "之剑"
@@ -891,7 +898,7 @@ def parse_equips(html_text, want_id=False):
 # 示例（用户自定义）:
 #   BEACH_RULES = [
 #       ("神秘3等", "mystery and quality>=3"),
-#       ("只留探险者之剑高值", "name=='探险者之剑' and total>=450"),
+#       ("只留探险者之剑高值", "name=='探险者之剑' and total_number>=450"),
 #   ]
 #   → 拾取 = (神秘 且 3等以上) 或 (指定名且高总值)
 
@@ -900,10 +907,10 @@ BEACH_RULES = [
     ("神秘",   "mystery"),
     # 能熔炼 → 收（品质≥3 且 总值≥410%, 供手动熔炼, 长期规则）
     # ⚠️ 已涵盖橙装（2026-09-05 确认逻辑重复后删除橙装规则）:
-    #   橙装 total>=516 品质必≥3（品质=总值上限, 516%需品质≥4）且 ≥410
+    #   橙装 total_number>=516 品质必≥3（品质=总值上限, 516%需品质≥4）且 ≥410
     #   → 任何橙装都满足本规则 → 橙装规则是冗余子集, 删之行为不变;
-    #   smelt 命令自身有 total<516 / not mystery 兜底, 不会误熔橙装/神秘装
-    ("可熔炼", "quality>=3 and total>=410"),
+    #   smelt 命令自身有 total_number<516 / not mystery 兜底, 不会误熔橙装/神秘装
+    ("可熔炼", "quality>=3 and total_number>=410"),
 ]
 
 # ⭐ 同名硬性过滤（2026-09-05, 默认开）: 同名装备不是最好的 → 直接清理。
@@ -937,9 +944,30 @@ def _f_quality(it, ctx):
     return it["quality"]
 
 
-@_f("total")
+@_f("total_number")
 def _f_total(it, ctx):
     return it["total"]
+
+
+# ═══════════ 词条位置字段（2026-09-05 新增）═══════════
+# 装备固定 4 词条，且每种装备的词条种类固定（只有值不同）→ 按位置访问可靠。
+#   affix0~affix3          词条文本（如 "物理攻击 +64.4%"）→ 字符串比较
+#   affix0_name~affix3_name  词条名（如 "物理攻击"）→ 字符串比较
+#   affix0_pct~affix3_pct    词条评分（如 95.0）→ 数字比较
+#   affix0_color~affix3_color 词条颜色（red/orange/blue/green/purple）→ 字符串比较
+# 词条不足 4 个（解析异常/格式变化）→ 字段返回 None，比较结果为 False（不匹配）
+_AFFIX_SUFFIXES = [("", "text"), ("_name", "name"), ("_pct", "pct"), ("_color", "color")]
+for _i in range(4):
+    for _suffix, _key in _AFFIX_SUFFIXES:
+        def _make_affix_field(idx=_i, key=_key):
+            @_f(f"affix{idx}{_suffix}")
+            def _f_affix(it, ctx, _idx=idx, _key=key):
+                affixes = it.get("affixes") or []
+                if _idx < len(affixes):
+                    return affixes[_idx].get(_key)
+                return None  # 词条缺失 → None（比较时按 False 处理）
+            return _f_affix
+        _make_affix_field()
 
 
 def _same_name_allow(it, ctx):
@@ -1072,7 +1100,7 @@ def _parse_expr(expr):
 def _eval_rule(node, it, ctx):
     """三值逻辑求值: True/False/None。None = 中性(该规则不做决定),
     为将来可能的"中性字段"保留(如同名比较无同名情形);
-    当前字段(name/mystery/quality/total)均返回 bool/数字/字符串, None 分支不触发。"""
+    当前字段(name/mystery/quality/total_number)均返回 bool/数字/字符串, None 分支不触发。"""
     kind = node[0]
     if kind == "or":
         l = _eval_rule(node[1], it, ctx)
@@ -1107,7 +1135,10 @@ def _eval_rule(node, it, ctx):
         return bool(val) if val is not None else None
     # 数字比较
     if cmp_op in (">=", "<=", ">", "<"):
-        if val is None or isinstance(val, bool) or not isinstance(val, (int, float)):
+        # ⚠️ 词条缺失（affixN 越界返回 None）→ 不匹配（False），不报错
+        if val is None:
+            return False
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
             raise ValueError(f"字段 {name} 值 {val!r} 不能做数字比较 {cmp_op}{cmp_val}")
         if cmp_op == ">=":
             return val >= cmp_val
@@ -1118,7 +1149,10 @@ def _eval_rule(node, it, ctx):
         return val < cmp_val
     # 字符串比较
     if cmp_op in ("==", "!=", "contains", "startswith", "endswith"):
-        if val is None or not isinstance(val, str):
+        # ⚠️ 词条缺失（affixN 越界返回 None）→ 不匹配（False），不报错
+        if val is None:
+            return False
+        if not isinstance(val, str):
             raise ValueError(f"字段 {name} 值 {val!r} 不能做字符串比较 {cmp_op}")
         if cmp_op == "==":
             return val == cmp_val
