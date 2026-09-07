@@ -8,6 +8,7 @@
     python tools/ggz/ggz_daily.py gemup         # [1.5] 提升宝石（B以下只升梦>红>银；比例低优先）
     python tools/ggz/ggz_daily.py halo          # [1.5b] 提升光环（读光环天赋石持有量→c=29）
     python tools/ggz/ggz_daily.py wish          # [3] 许愿池（按 WISH_MODE：combo 300w 十连送1=11次 / single 30w×N）
+    python tools/ggz/ggz_daily.py shop [--full]  # [2] 商店（默认只买日限10W贝壳；--full 批量清仓+买1瓶药水）
     python tools/ggz/ggz_daily.py beach         # [4] 沙滩收取+清理（4.5 规则；空且有箱→自动刷新；--no-refresh 禁用自动刷新不耗箱）
     python tools/ggz/ggz_daily.py refresh       # [4.5] 强制刷新沙滩（耗随机装备箱）
     python tools/ggz/ggz_daily.py smelt         # [4.5c] 熔炼仓库可熔炼装备为护身符（手动）
@@ -120,7 +121,8 @@ def setup_logging():
 def load_cookie():
     path = os.path.join(os.path.dirname(__file__), "..", "cookie.txt")
     with open(path, encoding="utf-8") as f:
-        return f.read().strip()
+        # 第 1 行 = Cookie 头；第 2 行起 = KF_USER/KF_PASS 登录凭证（2026-09-07），不参与请求
+        return f.readline().strip()
 
 
 COOKIE = load_cookie()
@@ -134,9 +136,9 @@ _cookie_refreshed = False
 def refresh_cookie_auto():
     """cookie 失效时自动调用 get_cookies.smart_refresh_ggz() 刷新。
 
-    逻辑闭环（2026-08-24 用户设计）：
-      - Firefox Nightly 运行中 → 从 cookies.sqlite 提取（浏览器有最新登录态）
-      - Firefox Nightly 未运行 → 走入口链刷新（--refreshggz，不依赖浏览器）
+    逻辑（2026-09-07 用户重设计，不再依赖 Firefox Nightly）：
+      - cookie.txt 论坛 cookie 有效 → 走论坛入口链刷新（--refreshggz）
+      - 论坛 cookie 失效 → 用存储的账号密码重登（--login）
     成功后重新加载 COOKIE 全局变量。整个会话只刷新一次（防多请求重复触发）。
     返回 True=刷新成功，False=刷新失败/已刷新过。
     """
@@ -184,6 +186,12 @@ def add_secret(value):
 #                   ≥300 万 → 只做一次 10 连（11 次，最划算；600 万也只抽一次，剩的明天抽）
 #                   <300 万 → 按剩余贝壳抽 1-9 次（270 万 = 9 次；每天一次机会不浪费）
 WISH_MODE = "combo"
+
+# ===== 商店策略配置（2026-09-07，B 段开放商店，接口实测见 02 文档 §3.2b）=====
+# "daily"（默认）: 只买日限 10W 贝壳（c=5，1 星沙=10w 贝壳最优价），其余不自动买
+# "full"        : 日限(c=5) → 批量清仓(c=4，50 星沙=100w，仅日限价 1/5) → 剩≥20 星沙买 1 瓶体能药水(c=7)
+# ⚠️ 批量兑换太亏（2w/粒 vs 日限 10w/粒）；需要更多贝壳/药水请手动跑 `shop --full` 或网页买
+SHOP_MODE = "daily"
 
 # ===== 工坊目标成功率配置（2026-08-28）=====
 # 概率型道具（随机装备箱/灵魂药水/宝石原石）面板留档时额外输出
@@ -678,6 +686,83 @@ def wish():
         print("今日已许愿（服务器确认），跳过")
     else:
         show("c=18 许愿返回", r)
+
+
+def shop_click(c, **params):
+    """商店动作：POST fyg_shop_click.php c=<值>&safeid=（02 文档 §3.2b）。"""
+    params["c"] = c
+    params["safeid"] = SAFEID
+    return dec(request(BASE + "/fyg_shop_click.php", params))
+
+
+def shop(full=False):
+    """[2] 商店日限（B 段开放；2026-09-07 接口实测见 02 文档 §3.2b）。
+
+    策略（2026-09-07 用户指定）：默认只买日限 10W 贝壳（c=5，1 星沙=10w 最优价），
+    其余商品不自动买——c=4 批量（50 星沙=100w，2w/粒）只有日限价 1/5 太亏、
+    药水留给 c=13&id=2 重置翻牌更有价值。需要更多时手动跑 `shop --full`
+    （日限 → 批量清仓 → 剩 ≥20 星沙买 1 瓶药水）或网页操作。
+
+    返回格式（实测）：
+      c=5 成功   `已获得 100000 贝壳，本商品每日限1次。`
+      c=5 已买   `本商品每日限1次。`（零消耗，每日重跑安全）
+      c=6/c=2 余额不足 `星晶不足。`（星沙同理推测）
+    段位检测（2026-09-07）：先读战场状态（f=12）取段位，C 段及以下直接打印日志跳过，
+    不再请求商店页；B 段及以上再拉商店页，以页面含 zshopts 为开放硬指标兜底。
+    """
+    # 段位检测：未到 B 打一行日志就跳过（用户要求，省请求）
+    rank = str(parse_pk().get("段位", "?"))
+    if rank.startswith("C"):
+        print(f"当前段位: {rank} → 未到 B，商店未开放，跳过")
+        return
+    page = dec(request(BASE + "/fyg_shop.php"))
+    if "zshopts" not in page:
+        print(f"当前段位: {rank or '?'} → 商店页返回 shop_err（未开放），跳过")
+        return
+    print(f"当前段位: {rank} → 商店开放，执行")
+
+    def xs_now():
+        # 资源栏（骰子/星晶/星沙/贝壳）是 AJAX 动态加载：POST f=16 才有，
+        # fyg_shop.php 静态 HTML 里没有（2026-09-07 实测，读静态页恒为 0）
+        m = re.search(r"我的星沙\s*(\d+)\s*颗", read_block(16))
+        return int(m.group(1)) if m else 0
+
+    xs = xs_now()
+    mode = "full" if full else SHOP_MODE
+    print(f"星沙: {xs} | 模式: {mode}")
+
+    # 1) 日限 10W 贝壳（每天 1 次，1 星沙=10w 最优价）
+    r = shop_click(5)
+    if "已获得" in r:
+        xs -= 1
+        print(f"c=5 日限10W贝壳: 已获得 100000 贝壳（剩 {xs} 星沙）")
+    elif "每日限1次" in r:
+        print("c=5 日限10W贝壳: 今日已买过（零消耗）")
+    elif "不足" in r:
+        print("c=5 日限10W贝壳: 星沙不足，跳过")
+        return
+    else:
+        print(f"c=5 日限10W贝壳: {strip_tags(r)[:100] or '(空返回)'}")
+
+    if mode != "full":
+        print(f"剩余星沙: {xs}（daily 模式到此为止，批量/药水不自动买）")
+        return
+
+    # 2) full 模式：批量清仓（50 星沙=100w，2w/粒）
+    while True:
+        xs = xs_now()
+        if xs < 50:
+            break
+        r = shop_click(4)
+        print(f"c=4 100W贝壳(批量): {strip_tags(r)[:80] or '(空返回)'}")
+        if "已获得" not in r:
+            break
+
+    # 3) 剩 ≥20 买 1 瓶体能药水（每日限 4 瓶，full 只补 1 瓶，剩余星沙留次日吃日限价）
+    if xs >= 20:
+        r = shop_click(7)
+        print(f"c=7 体能药水: {strip_tags(r)[:80] or '(空返回)'}")
+    print(f"剩余星沙: {xs_now()}")
 
 
 def get_items():
@@ -1985,7 +2070,10 @@ def _gift_flip():
 
 def all_daily(no_refresh=False, bonus=0):
     """一键日常（按 05 §4A 顺序，逐步容错）：
-    addpoint → gem(收菜+开工) → gemup → halo → wish → beach → pk → gift
+    addpoint → gem(收菜+开工) → gemup → halo → shop → wish → beach → pk → gift
+    ⚠️ 2026-09-07 新增商店步骤（在许愿池之前）：星沙日限换贝壳（1 星沙=10w），
+    先于 wish 执行让贝壳尽早够 300w 十连阈值；默认 SHOP_MODE="daily" 只买日限，
+    批量/药水不自动买（太亏，需要时手动 `shop --full`）。
     ⚠️ 2026-08-26 药水策略（用户决定）：all 默认不执行 bonus（额外奖励），药水不自动消耗。
     需用时显式带 --bonus1/--bonus2（透传给翻牌步骤 gift(bonus=...)）：
       --bonus1 → 翻牌后 c=13&id=1 耗 1 药水再领（固定 6000 贝壳+6000 经验）
@@ -2002,7 +2090,7 @@ def all_daily(no_refresh=False, bonus=0):
       用户决定顺序后面再调整，先在此留档。
     """
     steps = [("加点", addpoint), ("工坊收菜", gem), ("宝石提升", gemup),
-             ("光环提升", halo), ("许愿池", wish),
+             ("光环提升", halo), ("商店", shop), ("许愿池", wish),
              ("沙滩收取", lambda: beach(allow_refresh=not no_refresh,
                                          wait_after_refresh=False)),
              ("出击打野", pk), ("翻牌", lambda: gift(bonus=bonus))]
@@ -2054,6 +2142,8 @@ def main():
         halo()
     elif cmd == "wish":
         wish()
+    elif cmd == "shop":
+        shop(full="--full" in sys.argv)
     elif cmd == "beach":
         no_refresh = "--no-refresh" in sys.argv
         beach(allow_refresh=not no_refresh, wait_after_refresh=not no_refresh)

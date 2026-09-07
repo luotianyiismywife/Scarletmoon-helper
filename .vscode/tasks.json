@@ -10,7 +10,7 @@
 				"all"
 			],
 			"group": "test",
-			"detail": "咕咕镇一键日常（加点→工坊→宝石→光环→许愿→沙滩→出击→翻牌；额外奖励需药水已改手动）"
+			"detail": "咕咕镇一键日常（加点→工坊→宝石→光环→商店→许愿→沙滩→出击→翻牌；额外奖励需药水已改手动）"
 		},
 		{
 			"label": "ggz: stat（状态汇总）",
@@ -66,6 +66,17 @@
 			],
 			"group": "test",
 			"detail": "耗光环天赋石 c=29 提升光环"
+		},
+		{
+			"label": "ggz: shop（商店日限）",
+			"type": "shell",
+			"command": "C:\\Windows\\py.exe",
+			"args": [
+				"tools/ggz/ggz_daily.py",
+				"shop"
+			],
+			"group": "test",
+			"detail": "只买日限10W贝壳(1星沙)；--full 批量清仓+买1瓶药水"
 		},
 		{
 			"label": "ggz: wish（许愿池）",

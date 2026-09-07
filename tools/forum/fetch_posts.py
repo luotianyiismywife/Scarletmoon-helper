@@ -60,7 +60,8 @@ def make_session():
     if not os.path.exists(COOKIE_PATH):
         print("[错误] 缺少 cookie.txt, 请先运行: python tools/get_cookies.py")
         sys.exit(1)
-    auth = open(COOKIE_PATH, encoding="utf-8").read().strip()
+    # 只取第 1 行（Cookie 头）；第 2 行起是 KF_USER/KF_PASS 凭证（2026-09-07）
+    auth = open(COOKIE_PATH, encoding="utf-8").readline().strip()
     s = requests.Session()
     s.headers.update(HEADERS)
     for part in auth.split(";"):

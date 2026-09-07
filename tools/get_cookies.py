@@ -5,12 +5,14 @@
     python tools/get_cookies.py                    # 提取全部（论坛 + 咕咕镇游戏）
     python tools/get_cookies.py --forum            # 仅论坛 bbs.kfpromax.com
     python tools/get_cookies.py --game             # 仅咕咕镇 www.momozhen.com
-    python tools/get_cookies.py --login            # 账号密码登录论坛并刷新 cookie
+    python tools/get_cookies.py --login <用户> <密码>  # 账号密码登录+刷新（凭证自动存 cookie.txt）
+    python tools/get_cookies.py --login            # 同上，复用 cookie.txt 已存凭证
     python tools/get_cookies.py --refreshggz       # 用现有论坛 cookie 走入口链刷新咕咕镇 cookie
 
 输出:
-    cookie.txt (项目根目录, 已 gitignore) —— 一行 "name=value; name=value" 格式,
-    供 fetch_posts.py / 咕咕镇接口调用作为 Cookie 头使用。
+    cookie.txt (项目根目录, 已 gitignore) —— 第 1 行 "name=value; name=value" 格式
+    （Cookie 头），第 2 行起 KF_USER=/KF_PASS= 凭证（登录时自动存入），
+    供 fetch_posts.py / 咕咕镇接口调用（读取方只取第 1 行）。
 
 说明:
     - 论坛认证 Cookie (2ed4e_*) 与咕咕镇游戏 Cookie (fyg2019_*) 均为 HttpOnly,
@@ -21,7 +23,9 @@
       Cookie 不落盘, 由服务器在首次请求时自动补发。
     - --login 模式：通过论坛账号密码模拟登录（PHPWind 登录表单, 无验证码）,
       登录后自动走入口跳转链, 让服务器下发新的游戏 Cookie（含新 endtime）。
-      账号密码从环境变量 KF_USER / KF_PASS 读取（不写入代码与文件）。
+      账号密码来源：命令行参数 > 环境变量 KF_USER/KF_PASS > cookie.txt 已存凭证
+      （第 2 行起 KF_USER=/KF_PASS=，登录成功后自动存入；cookie.txt 已 gitignore，
+      所有读取方只取第 1 行 Cookie，凭证行不影响任何调用方）。
     - --refreshggz 模式：读 cookie.txt 现有论坛 Cookie（2ed4e_*）走入口链刷新游戏
       Cookie，无需账号密码；论坛登录态仍有效即可。若论坛 Cookie 也失效，入口链
       不会下发有效 endtime（与当前时间几乎相同），会报错提示先重新登录。
@@ -40,6 +44,11 @@ from http.cookiejar import Cookie, CookieJar
 
 PROFILE = "30hfbhjk.default-nightly"
 OUTPUT = os.path.join(os.path.dirname(__file__), "cookie.txt")
+
+# cookie.txt 第 2 行起的凭证行前缀（2026-09-07）：第 1 行 = Cookie 头，
+# 第 2 行起 = KF_USER=<论坛用户名> / KF_PASS=<论坛密码>（已 gitignore 不入库）
+CRED_USER = "KF_USER"
+CRED_PASS = "KF_PASS"
 
 FORUM_BASE = "https://bbs.kfpromax.com"
 GAME_BASE = "https://www.momozhen.com"
@@ -118,15 +127,27 @@ def extract_from_firefox(select):
     return all_cookies
 
 
-def login_and_refresh():
+def login_and_refresh(user=None, pwd=None):
     """账号密码登录论坛 + 走入口链刷新游戏 cookie。
+
+    账号密码来源（按优先级）：
+      1. 命令行参数 `--login <用户名> <密码>`
+      2. 环境变量 KF_USER / KF_PASS
+      3. cookie.txt 已存凭证（第 2 行起，2026-09-07）
+    登录成功后凭证自动存回 cookie.txt（已 gitignore），供下次无参数复用
+    / smart_refresh_ggz 兜底自动登录。
 
     返回 (cookie 列表)
     """
-    user = os.environ.get("KF_USER", "").strip()
-    pwd = os.environ.get("KF_PASS", "").strip()
     if not user or not pwd:
-        print("[错误] --login 需要环境变量 KF_USER / KF_PASS（论坛账号/密码）")
+        stored_user, stored_pwd = read_credentials()
+    if not user:
+        user = os.environ.get("KF_USER", "").strip() or stored_user
+    if not pwd:
+        pwd = os.environ.get("KF_PASS", "").strip() or stored_pwd
+    if not user or not pwd:
+        print("[错误] --login 需要账号密码：`--login <用户名> <密码>`、环境变量 KF_USER / KF_PASS，"
+              "或 cookie.txt 已存凭证")
         sys.exit(1)
 
     jar = CookieJar()
@@ -186,9 +207,11 @@ def login_and_refresh():
                 url2, body2 = http(m.group(1).decode(), referer=url2 or GAME_BASE + "/")
     time.sleep(1)
     _, body3 = http(GAME_BASE + "/fyg_index.php", referer=url2 or GAME_BASE + "/")
+    ok = bool(body3) and (("个人信息".encode("utf-8") in body3) or (user.encode("utf-8") in body3))
     if body3:
-        ok = ("个人信息".encode("utf-8") in body3) or (user.encode("utf-8") in body3)
         print(f"[4] 游戏主页: ({len(body3)} 字节) 登录{'成功' if ok else '可能失败'}")
+    if ok:
+        save_credentials(user, pwd)  # 凭证存 cookie.txt（gitignore），供无参数复用/兜底登录
 
     # 3. 收集 jar 中的 cookie
     all_cookies = []
@@ -204,13 +227,52 @@ def load_existing():
     forum_post.py 全被重定向 login.php）。"""
     if not os.path.exists(OUTPUT):
         return []
-    raw = open(OUTPUT, encoding="utf-8").read()
+    # 只读第 1 行（Cookie 头）；第 2 行起是 KF_USER/KF_PASS 凭证，不当 cookie 解析（2026-09-07）
+    raw = open(OUTPUT, encoding="utf-8").read().split("\n")[0].strip()
     result = []
     for part in raw.split(";"):
         name, _, val = part.strip().partition("=")
         if name:
             result.append((name, val))
     return result
+
+
+def read_credentials():
+    """读 cookie.txt 第 2 行起的 KF_USER/KF_PASS 凭证，返回 (user, pwd)。"""
+    user = pwd = None
+    if not os.path.exists(OUTPUT):
+        return None, None
+    with open(OUTPUT, encoding="utf-8") as f:
+        for line in f.readlines()[1:]:
+            line = line.strip()
+            if line.startswith(CRED_USER + "="):
+                user = line[len(CRED_USER) + 1:].strip()
+            elif line.startswith(CRED_PASS + "="):
+                pwd = line[len(CRED_PASS) + 1:].strip()
+    return user, pwd
+
+
+def write_cookie_file(cookie_str):
+    """写 cookie.txt：第 1 行 = Cookie 串，保留已有凭证行不覆盖丢失。"""
+    old_user, old_pwd = read_credentials()
+    lines = [cookie_str]
+    if old_user:
+        lines.append(f"{CRED_USER}={old_user}")
+    if old_pwd:
+        lines.append(f"{CRED_PASS}={old_pwd}")
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def save_credentials(user, pwd):
+    """把论坛账号密码追加/更新到 cookie.txt 第 2 行起（保留第 1 行 Cookie）。"""
+    cookie_str = ""
+    if os.path.exists(OUTPUT):
+        with open(OUTPUT, encoding="utf-8") as f:
+            cookie_str = f.readline().strip()
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        f.write("\n".join([cookie_str, f"{CRED_USER}={user}", f"{CRED_PASS}={pwd}"]) + "\n")
+    print(f"[凭证] 论坛账号密码已存入 {os.path.normpath(OUTPUT)}（已 gitignore 不入库）")
 
 
 def _seed_jar(jar, cookies):
@@ -330,78 +392,67 @@ def refresh_ggz_via_forum():
     else:
         print("[警告] 未拿到新 fyg2019_endtime")
 
-    # 5. 合并写回
+    # 5. 合并写回（write_cookie_file 保留第 2 行起的凭证行）
     merged = dict(existing)
     merged.update(new_cookies)
     out = "; ".join(f"{k}={v}" for k, v in merged.items())
-    with open(OUTPUT, "w", encoding="utf-8") as f:
-        f.write(out)
+    write_cookie_file(out)
     print(f"[完成] 共更新 {len(new_cookies)} 个 Cookie（合并后共 {len(merged)} 个），"
           f"已写入 {os.path.normpath(OUTPUT)}")
     return new_cookies
 
 
-def is_firefox_running():
-    """检测 Firefox Nightly 是否在运行（Windows：查进程路径含 'Firefox Nightly'）。
-
-    用于 smart_refresh_ggz 决定从 sqlite 提取还是走入口链刷新。
-    """
-    try:
-        import subprocess
-        # wmic 比 Get-Process 快且不依赖 PowerShell；按路径过滤只匹配 Nightly
-        r = subprocess.run(
-            ["wmic", "process", "where", "name='firefox.exe'", "get", "ExecutablePath"],
-            capture_output=True, text=True, timeout=10)
-        return "Firefox Nightly" in r.stdout
-    except Exception:
-        return False  # 检测失败按"未运行"处理，走入口链刷新（更稳妥）
-
-
 def smart_refresh_ggz():
     """智能刷新咕咕镇 cookie（供 ggz_daily.py / warehouse_tidy.py 自动调用）。
 
-    逻辑闭环（2026-08-24 用户设计）：
-      1. Firefox Nightly 运行中 → 从 cookies.sqlite 提取游戏 cookie（--game 逻辑）
-         （浏览器有最新登录态，直接读最准）
-      2. Firefox Nightly 未运行 → 用 cookie.txt 现有论坛 cookie 走入口链刷新
+    逻辑（2026-09-07 用户重设计，不再依赖 Firefox Nightly）：
+      1. cookie.txt 论坛 cookie 有效 → 走论坛入口链刷新游戏 cookie
          （--refreshggz 逻辑，不依赖浏览器）
+      2. 论坛 cookie 失效/入口链被拒 → 用 cookie.txt 存的账号密码重登
+         （--login 逻辑，凭证在登录成功时自动存入）
 
     返回 True 表示刷新成功（cookie.txt 已更新），False 表示失败。
     调用方刷新成功后应重新 load_cookie() 并重试请求。
     """
     print("[cookie 失效] 自动刷新咕咕镇 cookie ...")
-    if is_firefox_running():
-        print("  → 检测到 Firefox Nightly 运行中，从 cookies.sqlite 提取")
-        try:
-            cookies = extract_from_firefox({"game"})
-        except SystemExit:
-            return False
-    else:
-        print("  → Firefox Nightly 未运行，走入口链刷新（--refreshggz 逻辑）")
-        try:
-            cookies = refresh_ggz_via_forum()
-        except SystemExit:
-            return False
-
+    cookies = []
+    # 1. 论坛 cookie 有效 → 入口链刷新（内部以 fyg_index.php 返回个人信息为硬指标）
+    try:
+        cookies = refresh_ggz_via_forum()
+    except SystemExit:
+        cookies = []
+    # 2. 入口链失败（论坛 cookie 失效/无论坛 cookie）→ 账号密码重登兜底
     if not cookies:
-        print("  ❌ 刷新失败：未获取到任何 cookie")
+        user, pwd = read_credentials()
+        if user and pwd:
+            print("  → 论坛 cookie 失效，用存储的账号密码重新登录")
+            try:
+                cookies = login_and_refresh(user, pwd)
+            except SystemExit:
+                cookies = []
+        else:
+            print("  ⚠️ cookie.txt 无存储凭证，无法自动重登")
+    if not cookies:
+        print("  ❌ 刷新失败：可手动运行 py tools/get_cookies.py --login <用户> <密码>")
         return False
 
-    # 合并写入 cookie.txt（extract_from_firefox / refresh_ggz_via_forum 只返回列表，
-    # 写文件逻辑在 main() 里，smart_refresh_ggz 必须自己写，否则 cookie.txt 不更新
-    # → 调用方 load_cookie() 读到的还是旧 cookie，白刷新）
+    # 合并写入 cookie.txt（login_and_refresh 成功时已自己写回；这里兜底统一
+    # 再写一次保证凭证行不丢，调用方 load_cookie() 才能读到新 cookie）
     merged = dict(load_existing())
     merged.update(cookies)
     cookie_str = "; ".join(f"{name}={value}" for name, value in merged.items())
-    with open(OUTPUT, "w", encoding="utf-8") as f:
-        f.write(cookie_str)
+    write_cookie_file(cookie_str)
     print(f"  ✅ 刷新成功，{len(cookies)} 个 cookie 已合并写入 cookie.txt（共 {len(merged)} 个）")
     return True
 
 
 def main():
     if "--login" in sys.argv:
-        cookies = login_and_refresh()
+        # 支持 `--login <用户名> <密码>` 直接传参（2026-09-07）
+        args = sys.argv[sys.argv.index("--login") + 1:]
+        user = args[0] if len(args) > 0 and not args[0].startswith("--") else None
+        pwd = args[1] if len(args) > 1 and not args[1].startswith("--") else None
+        cookies = login_and_refresh(user, pwd)
     elif "--refreshggz" in sys.argv:
         cookies = refresh_ggz_via_forum()
     else:
@@ -416,12 +467,11 @@ def main():
         print("[错误] 没有任何 Cookie")
         sys.exit(1)
 
-    # 合并写入：新提取的覆盖同名 cookie，未提取的域保留（防丢失）
+    # 合并写入：新提取的覆盖同名 cookie，未提取的域保留（防丢失；凭证行保留）
     merged = dict(load_existing())
     merged.update(cookies)
     cookie_str = "; ".join(f"{name}={value}" for name, value in merged.items())
-    with open(OUTPUT, "w", encoding="utf-8") as f:
-        f.write(cookie_str)
+    write_cookie_file(cookie_str)
 
     print(f"[完成] 共 {len(cookies)} 个 Cookie 更新（合并后共 {len(merged)} 个），已写入 {os.path.normpath(OUTPUT)}")
 

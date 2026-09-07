@@ -49,7 +49,8 @@ def extract_publish_time(html):
 
 
 def make_session():
-    auth = open(COOKIE_PATH, encoding="utf-8").read().strip()
+    # 只取第 1 行（Cookie 头）；第 2 行起是 KF_USER/KF_PASS 凭证（2026-09-07）
+    auth = open(COOKIE_PATH, encoding="utf-8").readline().strip()
     s = requests.Session()
     s.headers.update(HEADERS)
     for part in auth.split(";"):
