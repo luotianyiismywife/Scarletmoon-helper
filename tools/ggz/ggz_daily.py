@@ -15,7 +15,8 @@
     python tools/ggz/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
     python tools/ggz/ggz_daily.py gift [--bonus1|--bonus2]  # [6] 翻牌（透视自动检测；--bonus1 耗1药水再领 / --bonus2 耗2药水重置再翻）
     python tools/ggz/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水；手动）
-    python tools/ggz/ggz_daily.py gearfit       # [8] 配装推荐×持有查询（每角色 4 部位推荐，同名取总分最高）
+    python tools/ggz/ggz_daily.py gearfit [--apply]  # [8] 配装推荐×持有查询（--apply 一键换装到当前角色推荐套）
+    python tools/ggz/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次；换卡自动连带换装+重排加点）
     python tools/ggz/ggz_daily.py all [--bonus1|--bonus2]  # 一键日常（按序执行；--bonus 显式开启翻牌后药水操作）
 
 日志: 每次执行同时输出到终端 + logs/ggz_YYYYMMDD.log（完整留档，
@@ -959,9 +960,9 @@ def parse_equips(html_text, want_id=False):
             affixes.append({"name": affix_name, "text": affix_text,
                             "pct": pct, "color": color})
         mystery = "[神秘属性]" in btn or "神秘属性" in btn
-        # bid：沙滩装备 zbtip('ID','4')，仓库装备 zbtip('ID','3')（2026-08-24 修复：
-        #   原仅匹配 '4'，导致仓库 f=2 解析 bid 全为 None，smelt/tidy 无法操作）
-        m = re.search(r"zbtip\('(\d+)','[34]'\)", btn)
+        # bid：沙滩装备 zbtip('ID','4')，**仓库 f=7 是 zbtip('ID','2')**（2026-09-10 实测；
+        #   此前只匹配 '[34]' 导致 f=7 全部 bid=None、换装找不到可穿件），f=2 是 '3'
+        m = re.search(r"zbtip\('(\d+)','[234]'\)", btn)
         bid = m.group(1) if m else None
         result.append({"icon": icon, "quality": quality, "name": name,
                        "level": level, "total": total, "mystery": mystery, "bid": bid,
@@ -1890,6 +1891,8 @@ def pk(max_fights=20, full=False):
     ⭐ 2026-09-10 谁强谁站前台：首次需要换卡且已知野怪等级时，全卡
     n=100 快筛按模拟胜率**重排换卡链**（强卡先切；f=18&zid= 免切卡直读
     + 装备账号级共享 → 无需真实切卡即可精确巡检）；快筛失败保持原序。
+    换卡闭环（2026-09-10）：切卡 → **换装到新卡推荐套**（equip_loadout）
+    → 重排专属加点 → 新卡模拟胜率（读到新装备面板）。
     """
     global ZID
     # 角色轮换列表（打野平局时切换）: 先试其他角色,最后回到当前
@@ -1952,6 +1955,14 @@ def pk(max_fights=20, full=False):
             print(f"  ⚠️ 切卡失败: {strip_tags(r2)[:60]}")
             return "fail"
         ZID = new_zid
+        # 换卡闭环 ①换装: 装备账号级共享 → 换到新卡推荐套立即全号生效
+        # （在模拟之前穿好, 让新卡预期胜率读到新装备面板）
+        new_name = next((n for n, z in CARD_ZIDS.items() if z == new_zid), None)
+        if new_name:
+            try:
+                equip_loadout(new_name)
+            except Exception as e:
+                print(f"  ⚠️ 换装异常: {e}")
         # 换角色后按新角色策略切换加点（2026-09-05: 点数共享,
         # apply 全量覆盖 = 切到该角色专属配置, 只耗 1 次修改）
         try:
@@ -2310,18 +2321,17 @@ def _fit_match(items, names):
     return [it for it in items if any(n in it["name"] for n in names)]
 
 
-def gearfit():
-    """[8] 配装推荐 × 持有查询：每角色 4 部位推荐装备，身上/仓库中找同名最优件。
+GEAR_KEY = lambda it: (it["total"], it["quality"], it["mystery"])
 
-    装备词条按类型固定 → 只对类型推荐；同名多件取词条总分最高
-    （品质/神秘次序）。仓库件附 id（供 c=3&id= 手动穿戴）。
+
+def _load_gear_sets():
+    """读身上(f=6)+仓库(f=7)装备并归一化（icon 补名/去前缀空格/标签部位）。
+
+    每件附加 slot(0武器/1手环/2防具/3耳环, 由 icon 码前两位定)。
+    返回 (worn, store)。
     """
     worn = parse_equips(read_block(6))
     store = parse_equips(read_block(7))
-    key = lambda it: (it["total"], it["quality"], it["mystery"])
-    worn.sort(key=key, reverse=True)
-    store.sort(key=key, reverse=True)
-    # f=6 旧版 title 解析可能拿不到名字 → 用 icon 码补（battle_sim 同源映射）
     try:
         import battle_sim as _bs
         icon2name = {}
@@ -2338,12 +2348,22 @@ def gearfit():
     for it in worn + store:
         if it["name"]:
             it["name"] = it["name"].lstrip("> ").replace(" ", "").strip()
+        it["slot"] = int(it["icon"]) // 100 - 21 if it["icon"] else -1
+    worn.sort(key=GEAR_KEY, reverse=True)
+    store.sort(key=GEAR_KEY, reverse=True)
+    return worn, store
+
+
+def gearfit():
+    """[8] 配装推荐 × 持有查询：每角色 4 部位推荐装备，身上/仓库中找同名最优件。
+
+    装备词条按类型固定 → 只对类型推荐；同名多件取词条总分最高
+    （品质/神秘次序）。仓库件附 id（供 c=3&id= 手动穿戴）。
+    """
+    worn, store = _load_gear_sets()
+    key = GEAR_KEY
     print(f"身上 {len(worn)} 件: " + " / ".join(_fmt_item(i) for i in worn))
     print(f"仓库装备 {len(store)} 件\n")
-    worn_names = {it["name"] for it in worn}
-    store_by_name = {}
-    for it in store:
-        store_by_name.setdefault(it["name"], []).append(it)
     cur = next((n for n, z in (list_cards() or {}).items() if z == ZID), "?")
     for role, (fit, note) in GEAR_FIT.items():
         mark = "（出战中）" if role == cur else ""
@@ -2364,6 +2384,57 @@ def gearfit():
             else:
                 print(f"  {slot}  ❌缺 {'/'.join(names)}（仓库无，沙滩/商店留意）")
         print()
+
+
+SLOT_CN = ["武器", "手环", "防具", "耳环"]
+
+
+def equip_loadout(role=None, dry_run=False):
+    """[7.5] 一键换装：给指定角色（默认出战卡）穿上 GEAR_FIT 推荐套。
+
+    ⚠️ 装备栏账号级共享 → 换装影响全号（所有卡同装）。
+    每部位: 推荐名子串匹配仓库 → 最优件(总分/品质/神秘)；身上已匹配推荐
+    且评分 ≥ 仓库最优则跳过，否则 c=3&id= 穿上（同部位替换，旧件自动回仓库）。
+    待核部位(空列表)不动。返回换装件数。
+    """
+    if role is None:
+        role = next((n for n, z in (list_cards() or {}).items() if z == ZID), None)
+    fit, _note = GEAR_FIT.get(role, ({}, ""))
+    if not fit:
+        print(f"[换装] {role}: GEAR_FIT 无推荐，跳过")
+        return 0
+    worn, store = _load_gear_sets()
+    worn_by_slot = {it["slot"]: it for it in worn if it["slot"] >= 0}
+    changed = 0
+    print(f"[换装] {role}{'（预览）' if dry_run else ''}")
+    for slot_idx, slot in enumerate(SLOT_CN):
+        names = fit.get(slot) or []
+        if not names:
+            continue
+        cands = [it for it in _fit_match(store, names) if it["slot"] == slot_idx and it.get("bid")]
+        best = max(cands, key=GEAR_KEY) if cands else None
+        cur_it = worn_by_slot.get(slot_idx)
+        cur_ok = (cur_it and any(n in cur_it["name"] for n in names)
+                  and (not best or GEAR_KEY(cur_it) >= GEAR_KEY(best)))
+        if cur_ok:
+            print(f"  {slot}  ✓保留 {_fmt_item(cur_it)}")
+            continue
+        if not best:
+            print(f"  {slot}  ❌缺 {'/'.join(names)}（仓库无可穿，保持现状）")
+            continue
+        if dry_run:
+            print(f"  {slot}  {_fmt_item(cur_it) if cur_it else '（空）'} → {_fmt_item(best)}")
+        else:
+            r = click(3, id=best["bid"])
+            ok = "已装备" in r
+            print(f"  {slot}  {'✓' if ok else '❌'} {(_fmt_item(cur_it) + ' → ') if cur_it else ''}"
+                  f"{_fmt_item(best)}{'' if ok else ' | ' + strip_tags(r)[:60]}")
+            changed += 1 if ok else 0
+    if dry_run:
+        print("（预览模式，未实际换装；--apply 执行）")
+    else:
+        print(f"换装完成: {changed} 件（旧件已回仓库，账号级共享全号生效）")
+    return changed
 
 
 def main():
@@ -2424,7 +2495,10 @@ def main():
     elif cmd == "bonus":
         bonus()
     elif cmd == "gearfit":
-        gearfit()
+        if "--apply" in sys.argv:
+            equip_loadout()
+        else:
+            gearfit()
     elif cmd == "all":
         no_refresh = "--no-refresh" in sys.argv
         bonus = 1 if "--bonus1" in sys.argv else (2 if "--bonus2" in sys.argv else 0)
