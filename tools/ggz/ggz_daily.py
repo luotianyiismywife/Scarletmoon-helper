@@ -40,9 +40,15 @@ ggzlib.cards / ggzlib.battle），改配置改对应源文件；下方 re-export
 import sys
 
 # ⚠️ 必须**先** reconfigure 再 import ggzlib：ggzlib.http 的 Tee 会替换
-# sys.stdout，之后再 reconfigure 会在 Tee 对象上炸 AttributeError（battle_sim
-# 顶部注释同款教训，2026-09-09 实战踩中）
-sys.stdout.reconfigure(encoding="utf-8")
+# sys.stdout，之后再 reconfigure 会在 Tee 对象上炸 AttributeError。
+# ⚠️ 必须 hasattr 守卫：battle_sim.load_player 里的 `import ggz_daily` 在
+# CLI 场景（python ggz_daily.py = __main__）会发生**二次导入**——sys.modules
+# 只有 '__main__' 没有 'ggz_daily' → 本文件被重新执行，此时 stdout 已是
+# setup_logging 装的 Tee → 2026-09-09 的 'Tee' object has no attribute
+# 'reconfigure' 真正祸根在此（当时误修到 battle_sim 侧，守卫加对了文件
+# 但没防住本行）。被二次导入时 stdout 是 Tee → 跳过；原生终端才设置。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # ── 功能 re-export（函数/类：对象绑定不可变，安全）──
 from ggzlib.state import AuthExpiredError, refresh_cookie_auto, load_cookie
