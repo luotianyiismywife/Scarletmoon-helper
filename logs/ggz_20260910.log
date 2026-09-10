@@ -203,3 +203,29 @@ c=11 BVIP打卡包(免费): 超级加倍！已获得 5星沙 、 100000贝壳 �
 
 === 翻牌区 ===
 &nbsp; 史诗 &nbsp; &nbsp; 史诗 &nbsp; &nbsp; 传说 &nbsp; &nbsp; 稀有 &nbsp; &nbsp; 稀有 &nbsp; &nbsp; 幸运 &nbsp; &nbsp; 稀有 &nbsp; &nbsp; 冥 &nbsp; &nbsp; 命 &nbsp; &nbsp; 希 &nbsp; &nbsp; 霞 &nbsp; &nbsp; 绮 &nbsp;
+
+============================================================
+[2026-09-10 09:47:54] 新会话开始
+============================================================
+[日志] 已写入 ..\logs\ggz_20260910.log
+  ⚠️ 请求重试 1/3: HTTPSConnectionPool(host='www.momozhen.com', port=443): Max retries exceeded with url: /fyg_index.php (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)')))（1.1s 后重试）
+  ⚠️ 请求重试 2/3: HTTPSConnectionPool(host='www.momozhen.com', port=443): Max retries exceeded with url: /fyg_index.php (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)')))（2.4s 后重试）
+[用户=a59404fe safeid=571062e7 出战角色zid=3000]
+c=5 切卡 zid=3005: ok
+✅ 出战角色已切换 zid=3005
+
+============================================================
+[2026-09-10 09:49:35] 新会话开始
+============================================================
+[日志] 已写入 ..\logs\ggz_20260910.log
+[用户=a59404fe safeid=571062e7 出战角色zid=3005]
+c=5 切卡 zid=3000: ok
+✅ 出战角色已切换 zid=3000
+
+============================================================
+[2026-09-10 09:54:37] 新会话开始
+============================================================
+[日志] 已写入 ..\logs\ggz_20260910.log
+[用户=a59404fe safeid=571062e7 出战角色zid=3000]
+c=5 切卡 zid=3005: ok
+✅ 出战角色已切换 zid=3005
