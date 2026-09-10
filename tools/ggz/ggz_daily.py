@@ -698,22 +698,38 @@ def shop_click(c, **params):
 def shop(full=False):
     """[2] 商店日限（B 段开放；2026-09-07 接口实测见 02 文档 §3.2b）。
 
-    策略（2026-09-07 用户指定）：默认只买日限 10W 贝壳（c=5，1 星沙=10w 最优价），
+    策略（2026-09-07 用户指定，2026-09-09 补免费日限）：先领免费 BVIP 打卡包
+    （c=11，得 1星沙+2W贝壳/天，不领白丢），再买日限 10W 贝壳（c=5）；
     其余商品不自动买——c=4 批量（50 星沙=100w，2w/粒）只有日限价 1/5 太亏、
-    药水留给 c=13&id=2 重置翻牌更有价值。需要更多时手动跑 `shop --full`
-    （日限 → 批量清仓 → 剩 ≥20 星沙买 1 瓶药水）或网页操作。
+    药水留给 c=13&id=2 重置翻牌更有价值；SVIP/120W贝壳是星晶（付费）项永不自动买。
+    需要更多时手动跑 `shop --full`（日限 → 批量清仓 → 剩 ≥20 星沙买 1 瓶药水）
+    或网页操作。
 
     返回格式（实测）：
+      c=11 成功   `已获得 1星沙 、 20000贝壳 ，本商品每日限1次。`
       c=5 成功   `已获得 100000 贝壳，本商品每日限1次。`
       c=5 已买   `本商品每日限1次。`（零消耗，每日重跑安全）
       c=6/c=2 余额不足 `星晶不足。`（星沙同理推测）
+    ⚠️ c=11 成功文案同时含"已获得"和"每日限1次"，解析必须先判"已获得"。
     段位检测（2026-09-07）：先读战场状态（f=12）取段位，C 段及以下直接打印日志跳过，
     不再请求商店页；B 段及以上再拉商店页，以页面含 zshopts 为开放硬指标兜底。
     """
+    # 0) 免费日限 BVIP 打卡包（2026-09-09 实测 c=11：得 1星沙+2W贝壳！）
+    #    ⚠️ 成功文案同时含"已获得"和"每日限1次"，必须先判"已获得"；
+    #    ⚠️ 该接口不吃段位门禁（CCC 段实测成功）→ 放在段位检查之前，
+    #    C 段也每天白拿（≈12w 贝壳等值），失败只打日志不阻塞后续流程
+    r = shop_click(11)
+    if "已获得" in r:
+        print(f"c=11 BVIP打卡包(免费): {strip_tags(r)[:80]}")
+    elif "每日限1次" in r:
+        print("c=11 BVIP打卡包: 今日已领过（零消耗）")
+    else:
+        print(f"c=11 BVIP打卡包: {strip_tags(r)[:80] or '(空返回)'}")
+
     # 段位检测：未到 B 打一行日志就跳过（用户要求，省请求）
     rank = str(parse_pk().get("段位", "?"))
     if rank.startswith("C"):
-        print(f"当前段位: {rank} → 未到 B，商店未开放，跳过")
+        print(f"当前段位: {rank} → 未到 B，商店（星沙购买项）未开放，跳过")
         return
     page = dec(request(BASE + "/fyg_shop.php"))
     if "zshopts" not in page:
@@ -1779,6 +1795,42 @@ def parse_monster(r):
     return {"name": name, "sld": sld, "hp": hp, "talents": talents}
 
 
+# ---------- 出击战斗模拟决策（2026-09-09 接入 battle_sim.py）----------
+# battle_sim = guguzhen-calculator newkf.cpp 的 Python 移植（对拍精度已验证：
+# 真实配置 vs 史莱姆 88/91/52 级模拟胜率与当日实战吻合）。详见 04-规则细节.md §4.7b
+PK_SIM_SWITCH_RATE = 40  # 模拟胜率 <40% → 判定打不过，换卡（否则视为偶发失败）
+PK_SIM_ROUNDS = 300      # 每次预测模拟局数（速度/精度平衡，约 2-4 秒）
+
+
+def parse_monster_level(mon):
+    """parse_monster 结果 → 野怪等级 int（'史莱姆（野怪 Lv.88）' → 88），失败 None。"""
+    if not mon:
+        return None
+    m = re.search(r"Lv\.(\d+)", mon.get("name", ""))
+    return int(m.group(1)) if m else None
+
+
+def sim_current_winrate(monster_lvl):
+    """模拟当前出战卡 vs 野怪，返回胜率%（0-100）；模拟不可用返回 None。
+
+    数据源 = battle_sim.load_player()（f=18 加点/等级/成长 + f=23 争夺等级 +
+    f=6 装备 + f=5 天赋，仅出战卡可读）。任何异常都兜底返回 None，
+    让 pk() 回退到原盲打策略——模拟是增强，绝不能阻塞日常。
+    """
+    try:
+        import battle_sim as bs
+    except Exception as e:
+        print(f"  ⚠️ battle_sim 导入失败（{e}），跳过模拟，回退盲打策略")
+        return None
+    try:
+        pc = bs.load_player(verbose=False)
+        st = bs.run_matches(pc, bs.ROLE_SHI, monster_lvl, n=PK_SIM_ROUNDS)
+        return st["win_rate"]
+    except Exception as e:
+        print(f"  ⚠️ 模拟失败（{e}），跳过，回退盲打策略")
+        return None
+
+
 def fight(target=1):
     """出击一次，返回 (结果类型, 原始文本)。fyg_v_intel.php 需带 safeid！"""
     r = dec(request(BASE + "/fyg_v_intel.php", {"id": target, "safeid": SAFEID}))
@@ -1826,6 +1878,12 @@ def pk(max_fights=20, full=False):
     打野平局（2026-09-05 用户改版）：平局=100 回合打不死，说明当前角色
     打不过这只怪 → **自动切换出战角色，从打人重新开始**（避免空转 20 次）。
     角色按 CARD_ZIDS 顺序轮换，全部试完仍平局则停止。
+
+    ⭐ 2026-09-09 接入战斗模拟（battle_sim.py，对拍精度已验证）：
+    首场打野战报拿野怪等级 → 之后每次打野失败/平局先**模拟当前卡胜率**，
+    胜率 < PK_SIM_SWITCH_RATE 判定"打不过"直接换卡（不再实际出击试错，
+    每次 lose 省 1% 进度/出击）；胜率尚可视为偶发失败继续打野。
+    换卡后立即模拟新卡预期胜率供参考。模拟不可用时回退原盲打策略。
     """
     global ZID
     # 角色轮换列表（打野平局时切换）: 先试其他角色,最后回到当前
@@ -1834,6 +1892,39 @@ def pk(max_fights=20, full=False):
     switch_seq = [z for z in card_order if z != ZID] + [ZID]  # 先试其他角色,最后回到当前
     switch_idx = 0
     draw_count = 0
+    monster_lvl = None  # 当日野怪等级（首场打野战报得知；同日基本稳定）
+
+    def _switch_next(reason):
+        """切换到 switch_seq 下一张卡（含加点同步+新卡预期胜率评估）。
+
+        返回 "ok"（切换成功，mode 已重置 pvp）/ "fail"（切卡失败，mode 不变）/
+        "exhausted"（所有角色已试完）。
+        """
+        nonlocal switch_idx, mode
+        global ZID
+        if switch_idx >= len(switch_seq):
+            return "exhausted"
+        new_zid = switch_seq[switch_idx]
+        switch_idx += 1
+        print(f"  🔄 {reason} → 切换出战角色 zid={new_zid}")
+        r2 = click(5, id=new_zid)
+        if "ok" not in r2 and "装备成功" not in r2:
+            print(f"  ⚠️ 切卡失败: {strip_tags(r2)[:60]}")
+            return "fail"
+        ZID = new_zid
+        # 换角色后按新角色策略切换加点（2026-09-05: 点数共享,
+        # apply 全量覆盖 = 切到该角色专属配置, 只耗 1 次修改）
+        try:
+            addpoint(zid=new_zid, apply=True)
+        except Exception as e:
+            print(f"  ⚠️ 加点异常: {e}")
+        mode = "pvp"  # 从打人重新开始
+        # 新卡预期胜率（换卡后加点/装备已生效，读到的就是新卡数据）
+        wr = sim_current_winrate(monster_lvl) if monster_lvl else None
+        if wr is not None:
+            print(f"  ↪ 新卡模拟胜率 {wr:.0f}% vs SHI:{monster_lvl}"
+                  f"（阈值 {PK_SIM_SWITCH_RATE}%）")
+        return "ok"
 
     # 当前模式: pvp(打人) / pve(打野)。开局先试打人。
     mode = "pvp"
@@ -1865,10 +1956,14 @@ def pk(max_fights=20, full=False):
         target_name = "打人" if target == 2 else "打野"
         print(f"出击结果: {kind}（{target_name}）")
         # 记录野怪信息（2026-09-05: 积累野怪池数据, 验证等级/天赋分布）
+        # 2026-09-09: 同时抽野怪等级供战斗模拟（首场得知后当日复用）
         if target == 1 and kind in ("win", "draw", "lose"):
             mon = parse_monster(r)
             if mon:
                 print(f"  野怪: {mon['name']} 盾{mon['sld']} 血{mon['hp']} 天赋{mon['talents']}")
+                lvl = parse_monster_level(mon)
+                if lvl:
+                    monster_lvl = lvl
         if kind == "limit":
             print("出击次数达上限")
             break
@@ -1880,35 +1975,30 @@ def pk(max_fights=20, full=False):
             elif kind == "draw":
                 # 打野平局: 100 回合打不死 → 换角色重来（从打人开始）
                 draw_count += 1
-                print(f"  ↪ 打野平局（第 {draw_count} 次）→ 换角色重来")
-                if switch_idx >= len(switch_seq):
+                wr = sim_current_winrate(monster_lvl) if monster_lvl else None
+                tag = f"（模拟胜率 {wr:.0f}%）" if wr is not None else ""
+                print(f"  ↪ 打野平局（第 {draw_count} 次）{tag} → 换角色重来")
+                if _switch_next("平局打不死") == "exhausted":
                     print("  ⛔ 所有角色都试过了，仍打不过，停止")
                     break
-                new_zid = switch_seq[switch_idx]
-                switch_idx += 1
-                print(f"  🔄 切换出战角色 → zid={new_zid}")
-                r = click(5, id=new_zid)
-                if "ok" not in r and "装备成功" not in r:
-                    print(f"  ⚠️ 切卡失败: {strip_tags(r)[:60]}")
-                    continue
-                ZID = new_zid
-                # 换角色后按新角色策略切换加点（2026-09-05: 点数共享,
-                # apply 全量覆盖 = 切到该角色专属配置, 只耗 1 次修改）
-                try:
-                    addpoint(zid=new_zid, apply=True)
-                except Exception as e:
-                    print(f"  ⚠️ 加点异常: {e}")
-                mode = "pvp"  # 从打人重新开始
             continue
         if kind == "lose":
             if target == 2:
                 print("  ↪ 打人失败，切打野")
                 mode = "pve"
             else:
-                # 打野失败 → 留在打野继续（不切回打人）：
-                # 打人匹不到会轮空(不计次数)，切回去只会 pvp/pve 来回空转 = 死循环;
-                # 留在打野稳定累计连败 → 5 连败掉段送狗牌 + 野怪变弱 → 更好打
-                print("  ↪ 打野失败，继续打野（连败累计，掉段后野怪变弱更好打）")
+                # 打野失败 → 先模拟当前卡 vs 野怪（2026-09-09 接入 battle_sim）：
+                # 胜率过低 = 不是运气差而是打不过 → 直接换卡（省 1-2 次试错出击）；
+                # 胜率尚可 = 偶发失败 → 继续打野（连败掉段送狗牌+野怪变弱更好打）
+                wr = sim_current_winrate(monster_lvl) if monster_lvl else None
+                if wr is not None and wr < PK_SIM_SWITCH_RATE:
+                    print(f"  ↪ 打野失败，模拟胜率 {wr:.0f}% < {PK_SIM_SWITCH_RATE}% → 换卡")
+                    if _switch_next("模拟判定打不过") == "exhausted":
+                        print("  ⛔ 所有角色都试过了，仍打不过，停止")
+                        break
+                    continue
+                why = f"模拟胜率 {wr:.0f}%（偶发失败）" if wr is not None else "模拟不可用"
+                print(f"  ↪ 打野失败，继续打野（{why}；连败累计，掉段后野怪变弱更好打）")
                 mode = "pve"
             continue
         # win: 保持当前模式
