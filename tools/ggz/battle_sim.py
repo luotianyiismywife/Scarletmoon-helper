@@ -1914,10 +1914,10 @@ def load_player(zid=None, verbose=True):
     import re as _re
     import ggz_daily as g
 
-    if not getattr(g, "USER", None) or not getattr(g, "SAFEID", None):
-        g.USER, g.SAFEID = g.get_user_and_safeid()
-    if not getattr(g, "ZID", None):
-        g.ZID = g.get_active_zid()
+    # 2026-09-10 重构后：USER/SAFEID/ZID 宿主 = ggzlib.state，写状态必须走
+    # ensure_session（直写 g.USER 只会覆盖 ggz_daily 的转发影子属性，
+    # ggzlib.http.request 读 state.COOKIE 拿不到）
+    g.ensure_session()
     if zid is None:
         zid = g.ZID
     # 2026-09-10：f=18&zid= 直读任意卡 + 装备栏账号级共享（切卡实测同一套 4 件不变）

@@ -35,14 +35,14 @@ import ggz_daily as g
 def tidy(dry_run=False, green_only=False, clear_beach=False):
     """仓库整理主逻辑。"""
     g.setup_logging()
-    g.USER, g.SAFEID = g.get_user_and_safeid()
-    if not g.SAFEID or not g.USER:
+    # 2026-09-10 重构后：USER/SAFEID/ZID 宿主 = ggzlib.state，写必须走 ensure_session
+    user, safeid, zid = g.ensure_session()
+    if not safeid or not user:
         print("无法获取登录信息（用户名/safeid），请确认 cookie 有效")
         sys.exit(1)
-    g.ZID = g.get_active_zid()
-    g.add_secret(g.USER)
-    g.add_secret(g.SAFEID)
-    print(f"[用户={g.USER} safeid={g.SAFEID} 出战角色zid={g.ZID}]")
+    g.add_secret(user)
+    g.add_secret(safeid)
+    print(f"[用户={user} safeid={safeid} 出战角色zid={zid}]")
 
     t = g.read_block(2)
     items = g.parse_equips(t, want_id=True)
