@@ -15,6 +15,7 @@
     python tools/ggz/ggz_daily.py pk [n]        # [5] 出击打野（默认 3 狗牌停；[--full] 打满 n 次）
     python tools/ggz/ggz_daily.py gift [--bonus1|--bonus2]  # [6] 翻牌（透视自动检测；--bonus1 耗1药水再领 / --bonus2 耗2药水重置再翻）
     python tools/ggz/ggz_daily.py bonus         # [7] 额外奖励（耗 1 体能刺激药水；手动）
+    python tools/ggz/ggz_daily.py gearfit       # [8] 配装推荐×持有查询（每角色 4 部位推荐，同名取总分最高）
     python tools/ggz/ggz_daily.py all [--bonus1|--bonus2]  # 一键日常（按序执行；--bonus 显式开启翻牌后药水操作）
 
 日志: 每次执行同时输出到终端 + logs/ggz_YYYYMMDD.log（完整留档，
@@ -2247,6 +2248,124 @@ def stat():
     print(strip_tags(t)[:300])
 
 
+# ═══════════════ 配装推荐 × 持有查询（2026-09-10）═══════════════
+# 原理: 装备词条按**类型固定**（newkf/battle_sim 同源）→ 推荐只对"类型"；
+#       同名多件时取词条总分最高（品质/神秘作次序）。
+# 依据: 07-角色属性表.md 各角色构筑；社区简称已还原全名
+#       （对剑=彩金长剑、冥戒=噬魔戒指、反甲=荆棘重甲、舞戒=海星戒指、
+#         梦头=占星师的耳饰、狂刃=狂信者的荣誉之刃、神秘袍=旅法师的灵光袍）。
+# 槽位名: 武器/手环/防具/耳环（f=6 四部位）。列表=可选替代（任一命中即可）。
+GEAR_FIT = {
+    "舞": ({"武器": ["狂信者的荣誉之刃"], "手环": ["海星戒指"],
+          "防具": ["挑战斗篷"], "耳环": ["猎魔耳环"]},
+         "三刀流: 刃+海戒+斗篷+猎魔，堆暴击+技能率 3刀秒怪（tid=1079827）；海星戒指=舞专属"),
+    "梦": ({"武器": ["幽梦匕首"], "手环": ["秃鹫手环"],
+          "防具": ["旅法师的灵光袍"], "耳环": ["占星师的耳饰"]},
+         "T0 打野四件套；匕首只看34词条（伤害=被动出手），头饰只看25词条（上限90%最大护盾）"),
+    "薇": ({"武器": ["彩金长剑", "荆棘盾剑"], "手环": ["噬魔戒指"],
+          "防具": ["荆棘重甲"], "耳环": []},
+         "对剑流(彩金长剑)/剑盾流(荆棘盾剑)；冥戒=噬魔、反甲=荆棘重甲；'薇头'对应耳环待核"),
+    "伊": ({"武器": ["狂信者的荣誉之刃"], "手环": ["噬魔戒指"],
+          "防具": ["荆棘重甲"], "耳环": ["猎魔耳环"]},
+         "狂刃/噬魔戒/重甲/猎魔；卷攻速流（面板参考攻速 9866）"),
+    "冥": ({"武器": ["荆棘盾剑"], "手环": ["噬魔戒指"],
+          "防具": ["荆棘重甲"], "耳环": ["猎魔耳环"]},
+         "剑盾冥毕业: 盾剑+噬魔(神秘=命运链接)+重甲(神秘=+25%反弹)+猎魔；PVP 强势/打野下水道"),
+    "默": ({"武器": ["荆棘盾剑"], "手环": ["海星戒指"],
+          "防具": ["旅法师的灵光袍"], "耳环": ["占星师的耳饰"]},
+         "全精默: 神秘剑盾/舞戒(海星)/神秘袍/梦头(占星师)"),
+    "命": ({"武器": ["彩金长剑"], "手环": ["折光戒指"],
+          "防具": ["荆棘重甲"], "耳环": []},
+         "对剑命=全敏捷: 对剑(彩金长剑)+折光+反甲；神弓命能上 S；'薇头'待核"),
+    "霞": ({"武器": [], "手环": [],
+          "防具": ["旅法师的灵光袍"], "耳环": ["占星师的耳饰"]},
+         "袍霞: 神秘霞杖+手环对应装备待核；PVP 输出流 1300智900精800敏"),
+    "希": ({"武器": [], "手环": [], "防具": [], "耳环": []},
+         "T0 血系（血之狂暴每2000成长+1%最大生命）；构筑装备 07 未载待补"),
+    "雅": ({"武器": ["狂信者的荣誉之刃"], "手环": ["折光戒指"],
+          "防具": ["旅法师的灵光袍"], "耳环": ["凶神耳环"]},
+         "活动限定（本号未持有）；高速高穿神秘刃+折光+神秘袍+凶神耳环(专属)"),
+    "绮": ({"武器": ["反叛者的刺杀弓"], "手环": [], "防具": [], "耳环": []},
+         "沸血+神秘弓（刺杀弓候选）；新卡当前版本弱，高速打护盾"),
+    "琳": ({"武器": [], "手环": [], "防具": [], "耳环": []},
+         "当前版本不推荐（刃琳/剑盾琳均弱）"),
+    "艾": ({"武器": [], "手环": [], "防具": [], "耳环": []},
+         "当前版本不推荐；星火宝石专属（每击降对方1%物/魔伤）"),
+}
+
+
+def _fmt_item(it):
+    if it["mystery"]:
+        tag = "神秘"
+    elif it["quality"]:
+        tag = f"q{it['quality']}"
+    else:
+        tag = ""  # f=6 身上件 icon 无品质后缀, 解析不出
+    bid = f" id={it['bid']}" if it.get("bid") else ""
+    return f"{it['name']} {it['total']:.0f}%{'(' + tag + ')' if tag else ''}{bid}"
+
+
+def _fit_match(items, names):
+    """子串匹配: 推荐名 ⊆ 装备名（兼容别名/前缀, 如 战线支撑者的荆棘重甲）。"""
+    return [it for it in items if any(n in it["name"] for n in names)]
+
+
+def gearfit():
+    """[8] 配装推荐 × 持有查询：每角色 4 部位推荐装备，身上/仓库中找同名最优件。
+
+    装备词条按类型固定 → 只对类型推荐；同名多件取词条总分最高
+    （品质/神秘次序）。仓库件附 id（供 c=3&id= 手动穿戴）。
+    """
+    worn = parse_equips(read_block(6))
+    store = parse_equips(read_block(7))
+    key = lambda it: (it["total"], it["quality"], it["mystery"])
+    worn.sort(key=key, reverse=True)
+    store.sort(key=key, reverse=True)
+    # f=6 旧版 title 解析可能拿不到名字 → 用 icon 码补（battle_sim 同源映射）
+    try:
+        import battle_sim as _bs
+        icon2name = {}
+        for base, types in ((2101, _bs.GEAR_NAME[1:13]), (2201, _bs.GEAR_NAME[13:19]),
+                            (2301, _bs.GEAR_NAME[19:26]), (2401, _bs.GEAR_NAME[26:31])):
+            for i, t in enumerate(types):
+                icon2name[base + i] = _bs.GEAR_CN[t]
+        for it in worn + store:
+            if it["name"] in ("?", "") and it["icon"]:
+                it["name"] = icon2name.get(int(it["icon"]), it["name"])
+    except Exception:
+        pass
+    # 名字归一化: f=7 title 带 '>' 前缀/内嵌空格（'>荆棘盾剑'/'命师的 传承手环'）
+    for it in worn + store:
+        if it["name"]:
+            it["name"] = it["name"].lstrip("> ").replace(" ", "").strip()
+    print(f"身上 {len(worn)} 件: " + " / ".join(_fmt_item(i) for i in worn))
+    print(f"仓库装备 {len(store)} 件\n")
+    worn_names = {it["name"] for it in worn}
+    store_by_name = {}
+    for it in store:
+        store_by_name.setdefault(it["name"], []).append(it)
+    cur = next((n for n, z in (list_cards() or {}).items() if z == ZID), "?")
+    for role, (fit, note) in GEAR_FIT.items():
+        mark = "（出战中）" if role == cur else ""
+        print(f"【{role}】{mark} {note}")
+        for slot, names in fit.items():
+            if not names:
+                print(f"  {slot}  ⚠️ 待核（构筑未载/简称待还原）")
+                continue
+            hit_worn = _fit_match(worn, names)
+            if hit_worn:
+                print(f"  {slot}  ✓身上 {'/'.join(_fmt_item(i) for i in hit_worn)}")
+                continue
+            cands = _fit_match(store, names)
+            if cands:
+                best = max(cands, key=key)
+                alt = f"（同{'/'.join(names)}×{len(cands)}取最优）" if len(cands) > 1 else ""
+                print(f"  {slot}  📦 仓库 {_fmt_item(best)}{alt}")
+            else:
+                print(f"  {slot}  ❌缺 {'/'.join(names)}（仓库无，沙滩/商店留意）")
+        print()
+
+
 def main():
     setup_logging()
     global SAFEID, USER, ZID
@@ -2304,6 +2423,8 @@ def main():
         gift(bonus=bonus)
     elif cmd == "bonus":
         bonus()
+    elif cmd == "gearfit":
+        gearfit()
     elif cmd == "all":
         no_refresh = "--no-refresh" in sys.argv
         bonus = 1 if "--bonus1" in sys.argv else (2 if "--bonus2" in sys.argv else 0)
