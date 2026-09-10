@@ -1902,12 +1902,13 @@ def _parse_my_auras(html_text):
 
 
 def load_player(zid=None, verbose=True):
-    """从游戏接口读当前出战角色配置 → Player（供模拟/出击预判）。
+    """从游戏接口读任意角色卡配置 → Player（供模拟/出击预判）。
 
     ⚠️ 依赖 ggz_daily（requests + cookie.txt）→ 延迟 import，本模块仍可离线用。
-    数据源（2026-09-09 逐项实测，见 02-接口.md）：
-      f=18&zid= → 卡片等级/六维/成长值；f=23 → 总争夺等级(=基础+幻影)；
-      f=6 → 身上装备（**仅出战卡有效**）；f=5 → 佩戴天赋（全局共享）。
+    数据源（2026-09-09 逐项实测，2026-09-10 补免切卡直读，见 02-接口.md）：
+      f=18&zid= → 卡片等级/六维/成长值（**不切卡可直读任意卡**，页首即目标卡名）；
+      f=23 → 总争夺等级(=基础+幻影，全局)；f=5 → 佩戴天赋（全局共享）；
+      f=6 → 身上装备（**账号级共享**：切卡实测同一套 4 件不变，任意卡同装）。
     许愿池/护身符无便捷数据源，按 0 假设（对拍验证影响极小）。
     """
     import re as _re
@@ -1919,9 +1920,8 @@ def load_player(zid=None, verbose=True):
         g.ZID = g.get_active_zid()
     if zid is None:
         zid = g.ZID
-    if zid != g.ZID:
-        raise ValueError(f"zid={zid} 非出战卡（装备/面板仅出战卡可读），"
-                         f"如需模拟其他卡请先 switch_card 切换")
+    # 2026-09-10：f=18&zid= 直读任意卡 + 装备栏账号级共享（切卡实测同一套 4 件不变）
+    # → 免切卡精确模拟任意卡；旧版此处对 zid≠出战 raise，已移除
 
     # f=18: 卡片详情（等级/六维/成长值）
     t18 = g.dec(g.request(g.BASE + "/fyg_read.php", {"f": 18, "zid": zid}))

@@ -300,8 +300,8 @@ def list_cards():
 def switch_card(zid=None, name=None):
     """[5.5] 切换出战角色（c=5 upcard）。传 zid 或角色名均可；不带参则列出所有角色。
 
-    ⚠️ 切卡后出击/加点/装备都跟着切（07 文档 §4：角色卡等级/加点/装备独立），
-    切卡前确认目标卡已加点且装备可打（2026-09-05：绮与舞属性点相同可试打野）。
+    ⚠️ 切卡后只有**出击目标**跟着切；加点/装备均为账号级共享、不跟着切
+    （2026-09-05 六维全卡同步 + 2026-09-10 装备 4 件切卡不变实测）。
     """
     global ZID
     if not zid and name:
@@ -1800,6 +1800,7 @@ def parse_monster(r):
 # 真实配置 vs 史莱姆 88/91/52 级模拟胜率与当日实战吻合）。详见 04-规则细节.md §4.7b
 PK_SIM_SWITCH_RATE = 40  # 模拟胜率 <40% → 判定打不过，换卡（否则视为偶发失败）
 PK_SIM_ROUNDS = 300      # 每次预测模拟局数（速度/精度平衡，约 2-4 秒）
+PK_SIM_QUICK_ROUNDS = 100  # 全卡快筛局数（重排换卡链用，约 1.3s/卡）
 
 
 def parse_monster_level(mon):
@@ -1884,6 +1885,10 @@ def pk(max_fights=20, full=False):
     胜率 < PK_SIM_SWITCH_RATE 判定"打不过"直接换卡（不再实际出击试错，
     每次 lose 省 1% 进度/出击）；胜率尚可视为偶发失败继续打野。
     换卡后立即模拟新卡预期胜率供参考。模拟不可用时回退原盲打策略。
+
+    ⭐ 2026-09-10 谁强谁站前台：首次需要换卡且已知野怪等级时，全卡
+    n=100 快筛按模拟胜率**重排换卡链**（强卡先切；f=18&zid= 免切卡直读
+    + 装备账号级共享 → 无需真实切卡即可精确巡检）；快筛失败保持原序。
     """
     global ZID
     # 角色轮换列表（打野平局时切换）: 先试其他角色,最后回到当前
@@ -1891,8 +1896,40 @@ def pk(max_fights=20, full=False):
     card_order = list(CARD_ZIDS.values())
     switch_seq = [z for z in card_order if z != ZID] + [ZID]  # 先试其他角色,最后回到当前
     switch_idx = 0
+    seq_sorted = False  # 换卡链是否已按模拟胜率重排（当日首次换卡时做一次）
     draw_count = 0
     monster_lvl = None  # 当日野怪等级（首场打野战报得知；同日基本稳定）
+
+    def _sort_seq_by_sim(lvl):
+        """按模拟胜率重排 switch_seq（2026-09-10: 谁强谁先切）。
+
+        全卡 n=100 快筛（约 15-20s，当日首次换卡才触发一次）；
+        任一卡模拟失败 → 该卡记 -1% 沉底。近似：统一用当前六维模拟
+        （六维全角色共享；切卡后 addpoint 重排成新卡策略，对量级判断
+        影响远小于角色技能/被动差异）。
+        """
+        nonlocal switch_seq, seq_sorted
+        if seq_sorted or not lvl:
+            return
+        seq_sorted = True
+        try:
+            import battle_sim as bs
+        except Exception as e:
+            print(f"  ⚠️ battle_sim 导入失败（{e}），换卡链保持原序")
+            return
+        zid2name = {z: n for n, z in CARD_ZIDS.items()}
+
+        def _wr(zid):
+            try:
+                pc = bs.load_player(zid=zid, verbose=False)
+                return bs.run_matches(pc, bs.ROLE_SHI, lvl,
+                                      n=PK_SIM_QUICK_ROUNDS)["win_rate"]
+            except Exception:
+                return -1.0
+        scored = [(z, _wr(z)) for z in switch_seq]
+        switch_seq = [z for z, _ in sorted(scored, key=lambda x: x[1], reverse=True)]
+        row = " > ".join(f"{zid2name.get(z, z)}{wr:.0f}%" for z, wr in scored)
+        print(f"  ↪ 换卡链按模拟胜率重排（vs SHI:{lvl}，n={PK_SIM_QUICK_ROUNDS}）:\n     {row}")
 
     def _switch_next(reason):
         """切换到 switch_seq 下一张卡（含加点同步+新卡预期胜率评估）。
@@ -1900,10 +1937,12 @@ def pk(max_fights=20, full=False):
         返回 "ok"（切换成功，mode 已重置 pvp）/ "fail"（切卡失败，mode 不变）/
         "exhausted"（所有角色已试完）。
         """
-        nonlocal switch_idx, mode
+        nonlocal switch_idx, mode, seq_sorted
         global ZID
         if switch_idx >= len(switch_seq):
             return "exhausted"
+        # 首次换卡且野怪等级已知 → 按模拟胜率重排换卡链（谁强谁先切）
+        _sort_seq_by_sim(monster_lvl)
         new_zid = switch_seq[switch_idx]
         switch_idx += 1
         print(f"  🔄 {reason} → 切换出战角色 zid={new_zid}")
